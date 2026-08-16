@@ -5,6 +5,14 @@ public extension Calendar {
     /// One calendar for every date decision, so nothing depends on the device
     /// locale. Computed rather than cached because the time zone can change
     /// under a running app, and a stale zone silently shifts every "today".
+    /// Fixed at UTC, for reading the parts out of a value that already is UTC.
+    static var gregorianUTC: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
     static var postal: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US_POSIX")

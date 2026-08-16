@@ -428,3 +428,91 @@ struct MailStoreConfigurationTests {
         }
     }
 }
+
+@Suite("Dates arrive in the shapes Postgres actually sends")
+struct PostalDateFormatTests {
+
+    /// PostgREST renders timestamptz with a numeric offset, not `Z`, and
+    /// Postgres keeps microseconds. Every shape below has been seen on the wire.
+    @Test("Every timestamp shape resolves to the same instant")
+    func everyTimestampShape() throws {
+        let expected = try #require(PostalDateFormats.parse("2026-07-23T21:06:00.000Z"))
+        for text in [
+            "2026-07-23T21:06:00+00:00",
+            "2026-07-23T21:06:00Z",
+            "2026-07-23T17:06:00-04:00",
+            "2026-07-24T06:06:00+09:00",
+        ] {
+            let parsed = try #require(PostalDateFormats.parse(text), "did not parse: \(text)")
+            #expect(parsed == expected, "\(text) gave \(parsed)")
+        }
+    }
+
+    @Test("Microseconds keep their value rather than being read as something else")
+    func microseconds() throws {
+        let micro = try #require(PostalDateFormats.parse("2026-07-23T21:06:00.123456+00:00"))
+        let milli = try #require(PostalDateFormats.parse("2026-07-23T21:06:00.123Z"))
+        #expect(micro == milli)
+        #expect(micro != PostalDateFormats.parse("2026-07-23T21:06:00Z"))
+    }
+
+    /// The bug this replaced: a `date` has no zone, so reading it as UTC
+    /// midnight and rendering it in the reader's calendar moved every postmark
+    /// back a day for everyone west of UTC.
+    @Test("A postmark is the day it says, in every zone that reads it")
+    func postmarkKeepsItsDay() throws {
+        for zone in ["America/Los_Angeles", "America/New_York", "UTC",
+                     "Europe/London", "Asia/Tokyo", "Pacific/Kiritimati"] {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.locale = Locale(identifier: "en_US_POSIX")
+            calendar.timeZone = try #require(TimeZone(identifier: zone))
+
+            let parsed = try #require(
+                PostalDateFormats.parse("2026-08-15", calendar: calendar), "\(zone)")
+            let parts = calendar.dateComponents([.year, .month, .day], from: parsed)
+            #expect(parts.year == 2026 && parts.month == 8 && parts.day == 15,
+                    "in \(zone) the 15th read back as \(parts)")
+
+            let shown = DateFormatter()
+            shown.calendar = calendar
+            shown.timeZone = calendar.timeZone
+            shown.locale = Locale(identifier: "en_US_POSIX")
+            shown.dateFormat = "EEEE d MMMM"
+            #expect(shown.string(from: parsed) == "Saturday 15 August", "\(zone)")
+        }
+    }
+
+    /// Why the day is rebuilt at midday rather than at midnight.
+    ///
+    /// Midnight leaves no slack in one direction: a postmark parsed in one zone
+    /// and read by a calendar behind it slips to the previous day immediately.
+    /// Midday is eleven hours of slack either way.
+    ///
+    /// It is not more than that, and the first version of this test claimed it
+    /// was. No instant renders as the same calendar date everywhere — the zones
+    /// run from UTC-12 to UTC+14, which is twenty-six hours — so a reader far
+    /// enough ahead still sees the next day. The guarantee is that the calendar
+    /// which parses a postmark is the calendar that renders it, which is what
+    /// the default argument arranges and what the test above pins. This one
+    /// only shows the tolerance around it.
+    @Test("A postmark tolerates a reader up to eleven hours out either way")
+    func postmarkToleratesReaderSkew() throws {
+        let parsedInUTC = try #require(
+            PostalDateFormats.parse("2026-08-15", calendar: .gregorianUTC))
+
+        for offset in stride(from: -11, through: 11, by: 1) {
+            var reader = Calendar(identifier: .gregorian)
+            reader.locale = Locale(identifier: "en_US_POSIX")
+            reader.timeZone = try #require(TimeZone(secondsFromGMT: offset * 3600))
+            let day = reader.component(.day, from: parsedInUTC)
+            #expect(day == 15, "read at UTC\(offset) the 15th became the \(day)")
+        }
+    }
+
+    @Test("Something that is not a date is nil, not today")
+    func rubbishIsNil() {
+        #expect(PostalDateFormats.parse("") == nil)
+        #expect(PostalDateFormats.parse("not a date") == nil)
+        #expect(PostalDateFormats.parse("2026-13-45") == nil)
+    }
+}

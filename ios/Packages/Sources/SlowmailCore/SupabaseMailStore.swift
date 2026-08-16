@@ -417,6 +417,8 @@ enum PostalDateFormats {
         return f
     }()
 
+    /// Only ever used to read the three numbers out of a bare date. The instant
+    /// it produces is discarded; see `parse`.
     private nonisolated(unsafe) static let dateOnly: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
@@ -426,9 +428,24 @@ enum PostalDateFormats {
         return f
     }()
 
-    static func parse(_ text: String) -> Date? {
-        withFraction.date(from: text)
-            ?? withoutFraction.date(from: text)
-            ?? dateOnly.date(from: text)
+    private nonisolated(unsafe) static let utc = Calendar.gregorianUTC
+
+    /// A timestamp is an instant and parses as one. A `date` is not.
+    ///
+    /// `postmark_date` is a Postgres `date`: a calendar day with no zone and no
+    /// instant in it. Reading it as UTC midnight and then rendering it in the
+    /// reader's own calendar moves it backwards a day for everyone west of
+    /// UTC — a letter postmarked the 15th shows as the 14th in New York, which
+    /// is the one thing a postmark must not do. So the day is taken as three
+    /// numbers and rebuilt at midday in the calendar that will render it, where
+    /// no offset and no daylight-saving jump can push it across a boundary.
+    static func parse(_ text: String, calendar: Calendar = .postal) -> Date? {
+        if let instant = withFraction.date(from: text) ?? withoutFraction.date(from: text) {
+            return instant
+        }
+        guard let day = dateOnly.date(from: text) else { return nil }
+        let parts = utc.dateComponents([.year, .month, .day], from: day)
+        return calendar.date(from: DateComponents(
+            year: parts.year, month: parts.month, day: parts.day, hour: 12))
     }
 }
