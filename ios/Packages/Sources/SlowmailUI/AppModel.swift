@@ -17,11 +17,12 @@ public final class AppModel {
     public private(set) var lastError: String?
 
     private let store: any MailStore
-    private let userID: String
+    /// Today's round whether or not it has passed; the skew window needs it
+    /// after `carrierExpected` has gone nil.
+    private var todaysRound: Date?
     private let clock: any Clock
 
-    public init(store: any MailStore, clock: any Clock, userID: String = Fixtures.userID) {
-        self.userID = userID
+    public init(store: any MailStore, clock: any Clock) {
         self.store = store
         self.clock = clock
     }
@@ -37,12 +38,17 @@ public final class AppModel {
         if let carrier = carrierExpected, carrier > clock.now {
             return min(carrier, collection)
         }
-        // The round has been, as far as this device can tell. It computes that
-        // instant from its own copy of the timezone database, which can put it
-        // up to an hour ahead of the server's — long enough to stop watching
+        // The round has been, as far as this device can tell. It works that
+        // instant out from its own copy of the timezone database, which can put
+        // it up to an hour ahead of the server's — long enough to stop watching
         // just before the mail it is waiting for actually lands. So keep
         // checking until the skew window has passed.
-        if let round = PostalCalendar.carrierArrival(forRecipient: userID, on: clock.now) {
+        //
+        // The round comes from the store, which knows the signed-in id and the
+        // recipient's profile zone. Working it out here instead used neither:
+        // the id defaulted to the fixture's and the zone to the device's, so
+        // the window could close before the real round on a travelling device.
+        if let round = todaysRound {
             let settled = round.addingTimeInterval(PostalCalendar.maximumRoundSkew)
             if settled > clock.now { return min(settled, collection) }
         }
@@ -55,6 +61,7 @@ public final class AppModel {
             outbox = try await store.outbox()
             correspondents = try await store.correspondents()
             carrierExpected = try await store.carrierExpected(on: clock.now)
+            todaysRound = try await store.carrierRound(on: clock.now)
             lastError = nil
         } catch {
             lastError = "Couldn't reach the post office."

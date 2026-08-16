@@ -3,6 +3,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source Scripts/env.sh
 
+# The fixtures are written as New York wall-clock times — `Fixtures.referenceDate`
+# is 15:40 in New York, which is before the 17:00 collection and after it in
+# other zones. Left to the machine's zone the suite passed here and failed in
+# UTC, so it was testing the developer's location as much as the code.
+#
+# New York specifically, not UTC: it is west of UTC, so a `date` parsed as UTC
+# midnight and rendered locally lands on the previous day. Pinning to UTC would
+# hide that, which is the bug this suite exists to catch.
+export TZ=America/New_York
+
 filtered=0
 for argument in "$@"; do
   case "${argument}" in

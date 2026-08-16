@@ -60,10 +60,12 @@ public actor MockMailStore: MailStore {
     /// coming, and a recipient could read that difference off the empty state to
     /// learn a letter exists before it was delivered.
     public func carrierExpected(on day: Date) async throws -> Date? {
-        guard let arrival = PostalCalendar.carrierArrival(forRecipient: userID, on: day) else {
-            return nil
-        }
+        guard let arrival = try await carrierRound(on: day) else { return nil }
         return arrival > clock.now ? arrival : nil
+    }
+
+    public func carrierRound(on day: Date) async throws -> Date? {
+        PostalCalendar.carrierArrival(forRecipient: userID, on: day)
     }
 
     // MARK: Writing

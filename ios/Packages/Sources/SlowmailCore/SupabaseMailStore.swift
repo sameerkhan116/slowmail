@@ -126,17 +126,19 @@ public actor SupabaseMailStore: MailStore {
     ///
     /// It is an estimate. See `MailStore.carrierExpected`.
     public func carrierExpected(on day: Date) async throws -> Date? {
-        let me = await tokens.userID
-        // The server works the round out in the zone on the recipient's
-        // profile. This device's zone is a different thing and moves when its
-        // owner travels; using it would put the estimate hours or a whole day
-        // out, which is far outside the skew the reload window allows for, and
-        // the app would stop watching for a delivery that had not happened yet.
-        guard let arrival = PostalCalendar.carrierArrival(
-            forRecipient: me, on: day, calendar: try await homeCalendar()) else {
-            return nil
-        }
+        guard let arrival = try await carrierRound(on: day) else { return nil }
         return arrival > clock.now ? arrival : nil
+    }
+
+    /// The server works the round out in the zone on the recipient's profile.
+    /// This device's zone is a different thing and moves when its owner
+    /// travels; using it would put the estimate hours or a whole day out, which
+    /// is far outside the skew the reload window allows for, and the app would
+    /// stop watching for a delivery that had not happened yet.
+    public func carrierRound(on day: Date) async throws -> Date? {
+        let me = await tokens.userID
+        return PostalCalendar.carrierArrival(
+            forRecipient: me, on: day, calendar: try await homeCalendar())
     }
 
     /// The signed-in reader's own profile zone, fetched once.

@@ -742,6 +742,78 @@ struct RoundSkewWindow {
         #expect(boundary <= round.addingTimeInterval(PostalCalendar.maximumRoundSkew))
     }
 
+    /// The two tests above both use `MockMailStore`, whose user id and zone are
+    /// the same ones the device would pick, so they cannot tell a round that
+    /// came from the store apart from one the view recomputed for itself. This
+    /// store deliberately reports a different round, which is what a signed-in
+    /// user in another timezone looks like.
+    private struct ShiftedRoundStore: MailStore {
+        let inner: MockMailStore
+        let shift: TimeInterval
+        let now: Date
+
+        func carrierRound(on day: Date) async throws -> Date? {
+            try await inner.carrierRound(on: day).map { $0.addingTimeInterval(shift) }
+        }
+        func carrierExpected(on day: Date) async throws -> Date? {
+            guard let round = try await carrierRound(on: day) else { return nil }
+            return round > now ? round : nil
+        }
+        func mailbox() async throws -> [Letter] { try await inner.mailbox() }
+        func outbox() async throws -> [Letter] { try await inner.outbox() }
+        func correspondence(with id: CorrespondentID) async throws -> [Letter] {
+            try await inner.correspondence(with: id)
+        }
+        func correspondents() async throws -> [Correspondent] { try await inner.correspondents() }
+        func correspondent(_ id: CorrespondentID) async throws -> Correspondent {
+            try await inner.correspondent(id)
+        }
+        func write(_ draft: Draft) async throws -> Letter { try await inner.write(draft) }
+        func revoke(_ id: LetterID) async throws { try await inner.revoke(id) }
+        func markRead(_ id: LetterID) async throws { try await inner.markRead(id) }
+    }
+
+    private func model(shift: TimeInterval, now: Date) async -> AppModel {
+        let store = ShiftedRoundStore(
+            inner: MockMailStore(clock: FixedClock(now: now)), shift: shift, now: now)
+        let model = AppModel(store: store, clock: FixedClock(now: now))
+        await model.load()
+        return model
+    }
+
+    @Test("The window is measured from the server's round, not this device's")
+    func windowFollowsTheStoresRound() async throws {
+        let local = try #require(
+            PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: thursdayAfternoon))
+        // The store's round is three hours later than the device would guess,
+        // and we are half an hour past that later round.
+        let now = local.addingTimeInterval(3 * 3600 + 1800)
+        let model = await self.model(shift: 3 * 3600, now: now)
+
+        #expect(model.carrierExpected == nil, "the store's round has passed too")
+        let boundary = try #require(model.nextBoundary)
+        // Recomputing locally would put the window at local+1h, long past, and
+        // settle straight to collection — stopping the watch while the server's
+        // window is still open.
+        #expect(
+            boundary < PostalCalendar.nextCollection(after: now),
+            "stopped watching inside the server's skew window")
+        #expect(boundary <= local.addingTimeInterval(3 * 3600 + PostalCalendar.maximumRoundSkew))
+    }
+
+    @Test("A round already long past does not hold the window open")
+    func earlierRoundSettles() async throws {
+        let local = try #require(
+            PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: thursdayAfternoon))
+        // The store's round was three hours earlier; its window shut long ago.
+        let now = local.addingTimeInterval(1800)
+        let model = await self.model(shift: -3 * 3600, now: now)
+
+        #expect(model.carrierExpected == nil)
+        // Recomputing locally would find local+1h still ahead and keep watching.
+        #expect(model.nextBoundary == PostalCalendar.nextCollection(after: now))
+    }
+
     @Test("Once the window has passed it waits for collection")
     func settlesAfterTheWindow() async throws {
         let round = try #require(

@@ -97,7 +97,7 @@ struct SupabaseTransportTests {
         try? await store.markRead("l-1")
 
         for header in await transport.headers {
-            let prefer = header["Prefer"] ?? ""
+            let prefer = (header["Prefer"] ?? header["prefer"]) ?? ""
             #expect(!prefer.contains("count"), "asked for a count: \(prefer)")
         }
     }
@@ -334,6 +334,30 @@ private let addresslessProfiles = """
   "country_code":"US","region":null,"is_territory":false}]
 """
 
+/// San Juan is US soil, roughly 1,600 miles from Brooklyn, and therefore lands
+/// in the 1,001–1,800 band on distance alone. `region` is the only thing that
+/// says otherwise. If that key stops decoding, the band silently becomes 4 and
+/// nothing else about the answer looks wrong.
+private let puertoRicoProfiles = """
+[{"id":"me-uuid","display_name":"Me","home_city_label":"Brooklyn, NY",
+  "timezone":"America/New_York","home_lat":40.68,"home_lng":-73.94,
+  "country_code":"US","region":"NY","is_territory":false},
+ {"id":"them-uuid","display_name":"Rosa","home_city_label":"San Juan, PR",
+  "timezone":"America/Puerto_Rico","home_lat":18.47,"home_lng":-66.11,
+  "country_code":"US","region":"PR","is_territory":false}]
+"""
+
+/// Guam carries no region here, so `is_territory` is the only field standing
+/// between a 7-day territory band and the 5-day band its distance would give.
+private let guamProfiles = """
+[{"id":"me-uuid","display_name":"Me","home_city_label":"Brooklyn, NY",
+  "timezone":"America/New_York","home_lat":40.68,"home_lng":-73.94,
+  "country_code":"US","region":"NY","is_territory":false},
+ {"id":"them-uuid","display_name":"Hana","home_city_label":"Hagatna, GU",
+  "timezone":"Pacific/Guam","home_lat":13.44,"home_lng":144.79,
+  "country_code":"US","region":null,"is_territory":true}]
+"""
+
 @Suite("Correspondents are read from the tables that hold no secret")
 struct SupabaseCorrespondentTests {
 
@@ -355,6 +379,33 @@ struct SupabaseCorrespondentTests {
         #expect(try #require(urls.first).contains("status=eq.accepted"))
         for url in urls { #expect(!url.contains("/letters")) }
         #expect(await transport.paths == ["/rest/v1/correspondents", "/rest/v1/profiles"])
+    }
+
+    /// Routing inputs are optional fields, so a wrong key decodes to nil rather
+    /// than throwing. These three assert the band the field changes, not the
+    /// field, because a quietly-nil `region` is only visible as a wrong number
+    /// of days.
+    @Test("Puerto Rico routes as non-contiguous, not as its distance")
+    func regionSurvivesTheWire() async throws {
+        let (store, _) = await self.store(profiles: puertoRicoProfiles)
+        let rosa = try #require(try await store.correspondents().first)
+        // 5 because the region says so; 4 would be the answer from miles alone.
+        #expect(rosa.transit == .domestic(5))
+    }
+
+    @Test("A territory routes as a territory, not as its distance")
+    func territoryFlagSurvivesTheWire() async throws {
+        let (store, _) = await self.store(profiles: guamProfiles)
+        let hana = try #require(try await store.correspondents().first)
+        // 7 because it is a territory; 5 is what the mileage band would give.
+        #expect(hana.transit == .domestic(7))
+    }
+
+    @Test("A correspondent's city is the one the server sent")
+    func cityLabelSurvivesTheWire() async throws {
+        let (store, _) = await self.store(profiles: puertoRicoProfiles)
+        let rosa = try #require(try await store.correspondents().first)
+        #expect(rosa.cityLabel == "San Juan, PR")
     }
 
     @Test("Distance and band come from the engine, computed against my own home")
@@ -571,6 +622,48 @@ struct PostalDateFormatTests {
         }
     }
 
+    /// Every other test here passes a calendar explicitly, so the argument the
+    /// production decoder actually uses — the default — was unasserted. Putting
+    /// `.gregorianUTC` back left all 106 green while restoring the day shift.
+    ///
+    /// Local midday and UTC midday are different instants in any zone but UTC,
+    /// so this compares instants rather than rendered days: in New York the day
+    /// renders the same either way and only the instant tells them apart.
+    @Test("The default calendar is the one that will render the date")
+    func defaultCalendarIsTheRenderingOne() throws {
+        #expect(
+            TimeZone.current.secondsFromGMT() != 0,
+            "the suite pins a non-UTC zone; in UTC this test cannot fail")
+
+        let production = try #require(PostalDateFormats.parse("2026-08-15"))
+        let localMidday = try #require(
+            Calendar.postal.date(
+                from: DateComponents(year: 2026, month: 8, day: 15, hour: 12)))
+        let utcMidday = try #require(
+            Calendar.gregorianUTC.date(
+                from: DateComponents(year: 2026, month: 8, day: 15, hour: 12)))
+
+        #expect(production == localMidday)
+        #expect(production != utcMidday, "the default fell back to UTC")
+    }
+
+    /// The same property through the real decoder, since that is what a letter
+    /// is actually built by.
+    @Test("A decoded letter's postmark is the day the server sent")
+    func decodedPostmarkKeepsItsDay() throws {
+        let json = Data(#"{"postmark_date":"2026-08-15"}"#.utf8)
+        struct OnlyPostmark: Decodable {
+            let postmarkDate: Date
+            enum CodingKeys: String, CodingKey { case postmarkDate = "postmark_date" }
+        }
+        let decoded = try JSONDecoder.postal.decode(OnlyPostmark.self, from: json)
+        let parts = Calendar.postal.dateComponents(
+            [.year, .month, .day], from: decoded.postmarkDate)
+        #expect(parts.year == 2026)
+        #expect(parts.month == 8)
+        #expect(parts.day == 15)
+    }
+
     @Test("Something that is not a date is nil, not today")
     func rubbishIsNil() {
         #expect(PostalDateFormats.parse("") == nil)
@@ -665,7 +758,10 @@ struct SupabaseTableReadTests {
 
         #expect(await transport.requests.count == 2, "both reads must be exercised")
         for request in await transport.requests {
-            let prefer = request.allHTTPHeaderFields?["Prefer"] ?? ""
+            // HTTP header names are case-insensitive and URLRequest keeps the
+            // casing it was given, so a dictionary lookup for one spelling misses
+            // the other.
+            let prefer = request.value(forHTTPHeaderField: "Prefer") ?? ""
             #expect(!prefer.contains("count"), "asked for a count: \(prefer)")
             #expect(request.allHTTPHeaderFields?["Authorization"] == "Bearer jwt-abc")
         }

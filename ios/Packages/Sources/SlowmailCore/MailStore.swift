@@ -34,4 +34,13 @@ public protocol MailStore: Sendable {
     /// landed; nothing shown to the recipient may claim that the day is
     /// finished, only that the carrier is not expected again.
     func carrierExpected(on day: Date) async throws -> Date?
+
+    /// Today's round whether or not it has already happened.
+    ///
+    /// `carrierExpected` goes nil the moment the round is behind us, which is
+    /// precisely when the skew window still needs watching, so the refresh
+    /// deadline cannot be derived from it. Recomputing the round in the UI
+    /// instead is what this exists to prevent: that copy had no access to the
+    /// signed-in id or the profile's zone and silently used neither.
+    func carrierRound(on day: Date) async throws -> Date?
 }
