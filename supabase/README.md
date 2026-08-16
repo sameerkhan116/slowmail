@@ -82,6 +82,13 @@ deno test -A $C supabase/tests/integration/zone_bands.ts           # far zone vs
 deno test -A $C supabase/functions/tests/                          # worker logic, no network
 ```
 
+Give the realtime probe about half a minute after a `db reset`. It subscribes to
+a control table it knows produces events, and the realtime service takes a
+moment to pick up publication changes after a reset — so a run started
+immediately reports `INCONCLUSIVE` and exits 1 rather than reading its own
+silence as proof. That refusal is the point: without the control, "letters
+delivered 0 events" is exactly what a disconnected probe reports too.
+
 `zone_bands.ts` is the one suite built on `Deno.test`, so it needs `deno test`.
 Started with `deno run` it would register its cases, run none, print nothing and
 exit 0 — passing by not existing. It now refuses that invocation and exits 1.
