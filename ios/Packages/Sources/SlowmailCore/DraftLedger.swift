@@ -16,7 +16,7 @@ import Foundation
 public struct DraftLedger: Equatable, Sendable {
     private var bodies: [CorrespondentID: String] = [:]
     private var posted: [CorrespondentID: String] = [:]
-    private var keys: [CorrespondentID: UUID] = [:]
+    private var keys: [CorrespondentID: PostingKey] = [:]
     private var generation = 0
 
     public init() {}
@@ -57,9 +57,9 @@ public struct DraftLedger: Equatable, Sendable {
     /// retried, because a retry is the same letter. Cleared once one has
     /// actually landed, so the next letter to the same person is a new letter
     /// even if it happens to say the same words.
-    public mutating func postingKey(for id: CorrespondentID) -> UUID {
+    public mutating func postingKey(for id: CorrespondentID) -> PostingKey {
         if let existing = keys[id] { return existing }
-        let fresh = UUID()
+        let fresh = PostingKey()
         keys[id] = fresh
         return fresh
     }

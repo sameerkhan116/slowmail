@@ -93,7 +93,7 @@ struct SupabaseTransportTests {
         let transport = RecordingTransport()
         let store = makeStore(transport)
         _ = try await store.mailbox()
-        _ = try? await store.write(Draft(correspondentID: "them-uuid", body: "Hi", clientKey: UUID()))
+        _ = try? await store.write(Draft(correspondentID: "them-uuid", body: "Hi", clientKey: PostingKey()))
         try? await store.markRead("l-1")
 
         for header in await transport.headers {
@@ -250,7 +250,7 @@ struct SupabaseErrorTests {
         let transport = RecordingTransport()
         let store = makeStore(transport)
         await #expect(throws: MailStoreError.emptyBody) {
-            _ = try await store.write(Draft(correspondentID: "them-uuid", body: "   \n ", clientKey: UUID()))
+            _ = try await store.write(Draft(correspondentID: "them-uuid", body: "   \n ", clientKey: PostingKey()))
         }
         #expect(await transport.requests.isEmpty)
     }
@@ -470,7 +470,7 @@ struct MockRefusesUnroutableTests {
             fixtures: Fixtures(correspondents: [nowhere], letters: []))
 
         await #expect(throws: MailStoreError.noRoutableAddress) {
-            _ = try await store.write(Draft(correspondentID: "nowhere", body: "Hello", clientKey: UUID()))
+            _ = try await store.write(Draft(correspondentID: "nowhere", body: "Hello", clientKey: PostingKey()))
         }
         // And nothing was filed away as though it had been posted.
         #expect(try await store.outbox().isEmpty)
@@ -694,7 +694,7 @@ struct SupabaseWriteTests {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
         let letter = try await makeStore(transport)
-            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: UUID()))
+            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: PostingKey()))
 
         // Decoding this as an array threw .malformedResponse while the letter
         // was already inserted and posted — so the sender was told it failed
@@ -712,7 +712,7 @@ struct SupabaseWriteTests {
     func argumentNamesAreRight() async throws {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
-        let key = UUID()
+        let key = PostingKey()
         _ = try await makeStore(transport)
             .write(Draft(correspondentID: "them-uuid", body: "  Hello  ", clientKey: key))
 
@@ -728,7 +728,7 @@ struct SupabaseWriteTests {
         #expect(arguments == [
             "p_recipient_id": "them-uuid",
             "p_body": "Hello",
-            "p_client_key": key.uuidString,
+            "p_client_key": key.value.uuidString,
         ])
     }
 
@@ -751,7 +751,7 @@ struct SupabaseWriteTests {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
         let letter = try await makeStore(transport)
-            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: UUID()))
+            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: PostingKey()))
         #expect(letter.collectedAt == nil)
         #expect(letter.deliveredAt == nil)
         #expect(letter.readAt == nil)

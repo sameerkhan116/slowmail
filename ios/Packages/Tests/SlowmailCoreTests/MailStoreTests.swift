@@ -117,7 +117,7 @@ struct WritingTests {
     @Test("A posted letter waits for the next collection")
     func postedLetterAwaitsCollection() async throws {
         let post = store()
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
         #expect(letter.state == .awaitingCollection)
         #expect(letter.collectedAt == nil)
         #expect(letter.isRevocable(asOf: thursdayAfternoon))
@@ -125,7 +125,7 @@ struct WritingTests {
 
     @Test("Written before five, collected the same day")
     func sameDayCollection() async throws {
-        let letter = try await store().write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let letter = try await store().write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
         let postmark = try #require(letter.postmarkDate)
         #expect(Calendar.postal.isDate(postmark, inSameDayAs: thursdayAfternoon))
         #expect(Calendar.postal.component(.hour, from: postmark) == 17)
@@ -135,7 +135,7 @@ struct WritingTests {
     func nextDayCollection() async throws {
         let evening = try #require(
             Calendar.postal.date(bySettingHour: 18, minute: 30, second: 0, of: thursdayAfternoon))
-        let letter = try await store(at: evening).write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let letter = try await store(at: evening).write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
         let postmark = try #require(letter.postmarkDate)
         let friday = try #require(Calendar.postal.date(byAdding: .day, value: 1, to: thursdayAfternoon))
         #expect(Calendar.postal.isDate(postmark, inSameDayAs: friday))
@@ -145,7 +145,7 @@ struct WritingTests {
     func emptyBodyRefused() async throws {
         let post = store()
         await #expect(throws: MailStoreError.emptyBody) {
-            try await post.write(Draft(correspondentID: "c-amara", body: "   \n  ", clientKey: UUID()))
+            try await post.write(Draft(correspondentID: "c-amara", body: "   \n  ", clientKey: PostingKey()))
         }
     }
 
@@ -153,7 +153,7 @@ struct WritingTests {
     func unknownRecipientRefused() async throws {
         let post = store()
         await #expect(throws: MailStoreError.unknownCorrespondent("c-nobody")) {
-            try await post.write(Draft(correspondentID: "c-nobody", body: "Hello.", clientKey: UUID()))
+            try await post.write(Draft(correspondentID: "c-nobody", body: "Hello.", clientKey: PostingKey()))
         }
     }
 
@@ -322,7 +322,7 @@ struct CollectionAdvancesTests {
         // strict or not, which is the whole question.
         let clock = SimulatedClock(now: thursdayAfternoon)
         let post = MockMailStore(clock: clock)
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
         let collection = try #require(letter.postmarkDate)
 
         clock.set(collection.addingTimeInterval(-1))
@@ -331,7 +331,7 @@ struct CollectionAdvancesTests {
 
         let clock2 = SimulatedClock(now: thursdayAfternoon)
         let post2 = MockMailStore(clock: clock2)
-        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
         clock2.set(try #require(l2.postmarkDate))
         #expect(!l2.isRevocable(asOf: clock2.now), "at five it has gone")
         await #expect(throws: MailStoreError.alreadyCollected) {
@@ -343,7 +343,7 @@ struct CollectionAdvancesTests {
     func stateAdvancesAtCollection() async throws {
         let clock = SimulatedClock(now: thursdayAfternoon)
         let post = MockMailStore(clock: clock)
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: PostingKey()))
 
         let before = try #require(try await post.outbox().first { $0.id == letter.id })
         #expect(before.state == .awaitingCollection)
@@ -362,7 +362,7 @@ struct InternationalTransitTests {
 
     @Test("A fourteen-day letter to Kyoto does not gain two Sundays")
     func internationalUsesCalendarDays() async throws {
-        let letter = try await store().write(Draft(correspondentID: "c-kenji", body: "Hello.", clientKey: UUID()))
+        let letter = try await store().write(Draft(correspondentID: "c-kenji", body: "Hello.", clientKey: PostingKey()))
         let postmark = try #require(letter.postmarkDate)
         let expected = try #require(letter.expectedDeliveryDate)
         let days = try #require(
@@ -393,7 +393,7 @@ struct InternationalTransitTests {
     func domesticUsesPostalDays() async throws {
         // Austin is four postal days from New York. Collected Thursday the 20th:
         // Fri 21, Sat 22, Sunday skipped, Mon 24, Tue 25.
-        let letter = try await store().write(Draft(correspondentID: "c-ben", body: "Hello.", clientKey: UUID()))
+        let letter = try await store().write(Draft(correspondentID: "c-ben", body: "Hello.", clientKey: PostingKey()))
         let expected = try #require(letter.expectedDeliveryDate)
         var c = DateComponents()
         c.year = 2026; c.month = 8; c.day = 25
@@ -972,7 +972,7 @@ struct RetrySafety {
     func mockIsIdempotent() async throws {
         let store = store()
         let person = try #require(await store.correspondents().first)
-        let key = UUID()
+        let key = PostingKey()
 
         let first = try await store.write(
             Draft(correspondentID: person.id, body: "Only once", clientKey: key))
@@ -992,9 +992,9 @@ struct RetrySafety {
         let person = try #require(await store.correspondents().first)
 
         let first = try await store.write(
-            Draft(correspondentID: person.id, body: "Only once", clientKey: UUID()))
+            Draft(correspondentID: person.id, body: "Only once", clientKey: PostingKey()))
         let second = try await store.write(
-            Draft(correspondentID: person.id, body: "Only once", clientKey: UUID()))
+            Draft(correspondentID: person.id, body: "Only once", clientKey: PostingKey()))
 
         #expect(first.id != second.id)
         let mine = try await store.outbox().filter { $0.body == "Only once" }

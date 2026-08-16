@@ -112,6 +112,22 @@ public struct Letter: Sendable, Identifiable, Hashable, Codable {
     }
 }
 
+/// Identifies the letter a sender is trying to post, across retries.
+///
+/// Deliberately not constructible outside this module. A view that could mint
+/// its own would compile while making every retry a new letter -- which is the
+/// bug the key exists to prevent, and a mutation drill confirmed that no test
+/// notices when the call site does exactly that. The only way to obtain one is
+/// `DraftLedger.postingKey(for:)`, and being obtainable only from the thing
+/// that keeps it stable is what makes it stable.
+public struct PostingKey: Sendable, Hashable {
+    let value: UUID
+
+    init() {
+        value = UUID()
+    }
+}
+
 public struct Draft: Sendable, Hashable {
     public let correspondentID: CorrespondentID
     public let body: String
@@ -125,9 +141,9 @@ public struct Draft: Sendable, Hashable {
     ///
     /// No default value: one would make "forgot to keep this stable" compile,
     /// and the resulting duplicate is unrecallable once collected.
-    public let clientKey: UUID
+    public let clientKey: PostingKey
 
-    public init(correspondentID: CorrespondentID, body: String, clientKey: UUID) {
+    public init(correspondentID: CorrespondentID, body: String, clientKey: PostingKey) {
         self.correspondentID = correspondentID
         self.body = body
         self.clientKey = clientKey

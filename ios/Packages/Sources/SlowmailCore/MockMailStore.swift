@@ -10,7 +10,7 @@ public actor MockMailStore: MailStore {
     private var people: [Correspondent]
     private let clock: any Clock
     private let userID: String
-    private var postedKeys: [UUID: LetterID] = [:]
+    private var postedKeys: [PostingKey: LetterID] = [:]
 
     public init(clock: any Clock, fixtures: Fixtures = .demo, userID: String = Fixtures.userID) {
         self.clock = clock

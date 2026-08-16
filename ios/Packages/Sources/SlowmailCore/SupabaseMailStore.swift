@@ -194,7 +194,7 @@ public actor SupabaseMailStore: MailStore {
                 // Sent so that the retry this comment describes is safe: the
                 // server answers a repeated key with the letter it already
                 // posted rather than posting another.
-                "p_client_key": draft.clientKey.uuidString,
+                "p_client_key": draft.clientKey.value.uuidString,
             ]))
         return try row.letter(viewedBy: me)
     }
