@@ -11,8 +11,19 @@ const WINDOW_MINUTES = (ARRIVAL_WINDOW_END_HOUR - ARRIVAL_WINDOW_START_HOUR) * 6
 /**
  * The moment a given recipient's carrier reaches them on a given day.
  *
- * Seeded on the person and the date, so every letter due that day arrives
- * together, and so the app can show the same answer twice.
+ * Seeded on the person and the date, so the app can ask twice and get the same
+ * answer.
+ *
+ * The *minute* is seeded, but the instant is not: turning 13:52 into a point in
+ * time needs `tz`, and a different `tz` gives a different point. Callers holding
+ * several letters for one recipient on one date must therefore pass the same
+ * zone for all of them, or those letters land hours apart and the recipient
+ * watches the post arrive twice.
+ *
+ * That is a real hazard wherever the zone is stored per letter rather than per
+ * person — a recipient who moves between two postings ends up with two
+ * snapshots of the same date. Resolve the zone once per recipient per date and
+ * reuse it; do not pass a zone that travels with the letter.
  */
 export function carrierArrival(userId: string, localDate: string, tz: string): string {
   const offset = seededIntInRange(0, WINDOW_MINUTES - 1, "carrier-arrival", userId, localDate);
