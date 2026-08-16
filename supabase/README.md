@@ -66,7 +66,7 @@ supabase db reset          # applies all migrations from scratch
 ```
 
 ```sh
-supabase test db                                     # pgTAP: 107 assertions
+supabase test db                                     # pgTAP: 111 assertions
 ./supabase/tests/rls_failure_drill.sh                # the suite must be able to fail
 ./supabase/tests/concurrency/delivery_concurrency.sh # two overlapping backends
 
@@ -247,17 +247,54 @@ Two decisions worth stating, because both could reasonably go the other way:
   effect on days not yet scheduled. Recomputing would either drag mail forward
   (a hold violation) or push back a letter that may already have landed.
 
-One exception, and it is deliberate: a far-eastward bundle can produce an
-instant *before* a given letter's own `collected_at` — bundle zone UTC+14 gives
-`delivery_date-1 19:00Z`, while a sender in UTC-11 collects at `postmark+1
-04:00Z`. In that case the letter keeps its own engine-computed `deliverAt` and
-is marked `+unbundled`. Mail that cannot arrive before it was posted outranks
-mail that arrives together.
+One exception, and it is deliberate: a bundle instant can fall *before* a given
+letter's own `collected_at`, in which case the letter keeps its own
+engine-computed `deliverAt` and is marked `+unbundled`.
+
+Arriving before it was posted is not a competing good that loses — it is
+unrepresentable. `letters_collected_is_routed` requires `deliver_at >=
+collected_at`, so a letter that took such an instant could not be stored at all.
+And the fallback cannot itself fail: the inversion is not a property of extreme
+zone spread — probed across the full 25-hour range over every ordered pair of
+Midway, Kiritimati, Apia, Pago Pago, Tokyo and New York at minimum transit
+distance, the engine produces **no inversion at all, with 90 hours of margin at
+the tightest** — it is a property of *sharing* an instant. A bundle is fixed by
+whichever letter is collected first, and a later letter can be collected after
+it. Falling back to the engine's own answer restores an instant derived from
+this letter's own collection, which is exactly what the engine guarantees.
+
+The consequence, named rather than fixed: an `+unbundled` letter is a second
+arrival on a day that already had one — the very thing bundling exists to
+prevent. It is not a hold issue, since every letter is still invisible until its
+own `deliver_at`, and it requires the recipient to have moved most of the way
+around the world between two postings due on the same date. Correctness about
+what can be stored outranks tidiness about what arrives together, so it stays.
 
 No change to `packages/mailclock` was needed. Its `carrierArrival` docstring
 overpromises, though: it can only make good on "every letter due that day
 arrives together" for a fixed timezone, and the obligation to pass a consistent
 one per bundle belongs to the caller.
+
+## The outbox shows posted mail
+
+`letter_state` includes `draft`, `outbox()` had no state filter, and the client
+renders anything not in transit or delivered as awaiting collection — so a draft
+would have been shown as "will be collected at 5pm" about mail that has no
+`collect_at` and that no sweep will ever pick up.
+
+No client can produce that today. `write_letter` creates and posts in one
+statement, `authenticated` holds no privilege on `public.letters` at all, and
+`slowmail_reader` is NOLOGIN NOINHERIT with only `postgres` as a member. But
+"unreachable today" is the kind of guarantee that quietly stops being true, and
+the cost of it stopping is a shipped client lying about mail. `outbox()` now
+excludes drafts, which changes how a future save-draft path fails: drafts are
+absent from the outbox, which whoever builds that path sees on their first run,
+rather than rendering as posted mail in a client nobody thought to change. A
+wrong answer in production becomes a missing answer in development.
+
+This removes the only read path to a draft, which is why the pgTAP suite had to
+stop looking one up through `outbox()`. No client needs it: `write_letter`
+returns the row.
 
 ## Routing inputs that cannot route
 
@@ -310,6 +347,7 @@ red:
 | push drain limited to a single batch | red: the drain stopped before the outbox was empty |
 | the whole `slowmail_reader` normalisation block removed | 3/8 red in `reader_role_hardening`, including the behavioural one: *the recipient is back to seeing 1 letters* |
 | `correspondent_card` status filter removed | 2 red in `040_leak_vectors`: `declined` and `blocked` edges both returned the card |
+| the `state <> 'draft'` filter removed from `outbox()` | 1 red in `020_letters_write_surface` — and only that one: the draft is still in the table and the outbox still non-empty, so the control assertions correctly stayed green |
 | the `/`-requiring timezone predicate removed | red in `timezone_agreement`: *the SQL cutoff runs LATE in 4 zones (56 probes)* — `CET`, `EET`, `MET`, `WET`, 60 minutes each, out of 598 swept |
 | `apply_collection` reverted to each letter's own `deliver_at` | 3 red in `050_postal_jobs`, including *two letters due the same day arrive at one instant, not two* |
 | `drop constraint profiles_territories_are_flagged` | 8 red in `zone_bands`: all seven territory regions stored unflagged, and the flag cleared by a later `UPDATE` |

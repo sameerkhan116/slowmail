@@ -237,10 +237,23 @@ begin
            transit_days = p.transit_days,
            delivery_date = p.delivery_date,
            -- Joining the day's bundle, unless that instant is already behind
-           -- this letter's own collection -- which a far eastward move can
-           -- produce -- in which case the letter keeps the instant the engine
-           -- guaranteed comes after collection. Mail that cannot arrive before
-           -- it was posted outranks mail that arrives together.
+           -- this letter's own collection, in which case the letter keeps its
+           -- own engine-computed instant.
+           --
+           -- That is not a preference between two goods; arriving before it was
+           -- posted is unrepresentable. `letters_collected_is_routed` requires
+           -- `deliver_at >= collected_at`, so a letter that took a bundle
+           -- instant behind its own collection would not be storable at all.
+           --
+           -- The fallback cannot itself fail, and the reason is worth stating
+           -- because it is not obvious. The inversion is not a property of
+           -- extreme zone spread -- the engine never produces one on its own,
+           -- with 90 hours of margin at the tightest across the full 25-hour
+           -- range -- it is a property of *sharing* an instant: a bundle is
+           -- fixed by whichever letter is collected first, and a later letter
+           -- can be collected after it. Falling back to the engine's own answer
+           -- for this letter therefore restores an instant derived from this
+           -- letter's own collection, which is the thing the engine guarantees.
            deliver_at = case
                           when b.deliver_at is not null and b.deliver_at >= p.collected_at
                             then b.deliver_at

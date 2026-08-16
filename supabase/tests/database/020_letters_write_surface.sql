@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, pg_catalog;
 
-select plan(20);
+select plan(24);
 
 insert into auth.users (id) values
   ('a0000000-0000-4000-8000-000000000001'),
@@ -106,12 +106,20 @@ select lives_ok(
 
 -- Posting -------------------------------------------------------------------
 
+-- The draft's id is carried over rather than looked up through outbox(), which
+-- no longer returns drafts. A real client never needs this lookup: write_letter
+-- creates and posts in one call and returns the row.
+reset role;
+create temporary table draft_two on commit drop as
+  select id from public.letters where body = 'Draft two.';
+grant select on draft_two to authenticated;
+
 set local role authenticated;
 -- Executed as authenticated on purpose: these are client RPCs, and running
 -- them under any other role would hide a missing grant exactly the way the
 -- collection outage hid behind worker tests that ran as postgres.
 select lives_ok(
-  $$ select public.post_letter((select id from public.outbox() where body = 'Draft two.')) $$,
+  $$ select public.post_letter((select id from draft_two)) $$,
   'the writer can post their own draft'
 );
 set local role slowmail_reader;
@@ -228,6 +236,58 @@ select throws_ok(
   'a recipient with no coordinates cannot be posted to either'
 );
 reset role;
+
+
+-- The outbox shows posted mail --------------------------------------------
+
+-- The client renders anything not in transit or delivered as awaiting
+-- collection, so a draft surfacing here would be shown as "will be collected at
+-- 5pm" about mail that has no collect_at and that no sweep will ever pick up.
+-- The first assertion is the contract; the second is the reason it currently
+-- cannot be violated, and it is the one that goes red if a save-draft path is
+-- ever added without a decision about how drafts surface.
+-- Ada is used here rather than Dee because she has both: a letter she posted
+-- earlier in this file, and the draft created just below. Asserting "no drafts"
+-- against an empty outbox would pass without testing anything, which is what
+-- the control assertion exists to catch -- and did, the first time this was
+-- written against Dee, whose only letter was refused for having nowhere to go.
+set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set local role slowmail_reader;
+insert into public.letters (recipient_id, body)
+values ('b0000000-0000-4000-8000-000000000002', 'An unposted draft.');
+reset role;
+
+set local role authenticated;
+
+select is(
+  (select count(*)::int from public.outbox() where state = 'draft'),
+  0,
+  'a draft is not posted mail and does not appear in the outbox'
+);
+
+select isnt(
+  (select count(*)::int from public.outbox()),
+  0,
+  'and the outbox is not empty, so the assertion above is about drafts rather than about nothing'
+);
+
+reset role;
+
+select is(
+  (select count(*)::int from public.letters
+    where sender_id = 'a0000000-0000-4000-8000-000000000001' and state = 'draft'),
+  1,
+  'the draft really is in the table, so the outbox is filtering it rather than missing it'
+);
+
+-- The privilege half of the same guarantee: nothing a client can reach leaves a
+-- draft in the table to be rendered at all.
+select is(
+  (select count(*)::int from information_schema.table_privileges
+    where table_name = 'letters' and grantee in ('authenticated', 'anon')),
+  0,
+  'no client role holds any privilege on letters, so drafts cannot be created outside write_letter'
+);
 
 select * from finish();
 rollback;
