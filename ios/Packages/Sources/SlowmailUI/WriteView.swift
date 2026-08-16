@@ -11,7 +11,7 @@ public struct WriteView: View {
     @Binding private var body_: String
     private let recipient: Correspondent?
     private let nextCollection: Date
-    private let estimatedArrival: Date
+    private let estimatedArrival: Date?
     private let now: Date
     private let isPosting: Bool
     private let alreadyPosted: Bool
@@ -22,7 +22,7 @@ public struct WriteView: View {
         body: Binding<String>,
         recipient: Correspondent?,
         nextCollection: Date,
-        estimatedArrival: Date,
+        estimatedArrival: Date?,
         now: Date,
         isPosting: Bool = false,
         alreadyPosted: Bool = false,
@@ -62,8 +62,8 @@ public struct WriteView: View {
                 Text(recipient?.name ?? "Choose someone")
                     .font(Theme.Typeface.letterGreeting)
                 Spacer()
-                if let recipient {
-                    Text(PostalWording.distance(miles: recipient.milesAway))
+                if let miles = recipient?.milesAway {
+                    Text(PostalWording.distance(miles: miles))
                         .font(Theme.Typeface.supporting)
                         .foregroundStyle(Theme.Palette.inkFaint)
                 }
@@ -105,7 +105,11 @@ public struct WriteView: View {
     private var schedule: some View {
         VStack(alignment: .leading, spacing: Theme.Space.tight) {
             PostmarkLabel(collectionLine)
-            PostmarkLabel(PostalWording.expectedArrival(estimatedArrival))
+            if let estimatedArrival {
+                PostmarkLabel(PostalWording.expectedArrival(estimatedArrival))
+            } else {
+                PostmarkLabel(PostalWording.unaddressed)
+            }
         }
     }
 
@@ -118,6 +122,7 @@ public struct WriteView: View {
         // These exact words went out already. Saying "Post" would invite the
         // sender to send the same letter twice.
         if alreadyPosted { return "Posted" }
+        if estimatedArrival == nil { return "No address" }
         return "Post"
     }
 
@@ -136,7 +141,7 @@ public struct WriteView: View {
     }
 
     private var canPost: Bool {
-        !isPosting && !alreadyPosted && recipient != nil
+        !isPosting && !alreadyPosted && recipient != nil && estimatedArrival != nil
             && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

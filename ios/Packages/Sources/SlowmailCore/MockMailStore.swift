@@ -77,6 +77,10 @@ public actor MockMailStore: MailStore {
         }
 
         let person = try await correspondent(draft.correspondentID)
+        // The post office refuses a letter it cannot route, and the mock has to
+        // refuse it too or the app would look posted here and fail against the
+        // real server.
+        guard let transit = person.transit else { throw MailStoreError.noRoutableAddress }
         let now = clock.now
         let postmark = PostalCalendar.nextCollection(after: now)
         let letter = Letter(
@@ -87,7 +91,7 @@ public actor MockMailStore: MailStore {
             state: .awaitingCollection,
             writtenAt: now,
             postmarkDate: postmark,
-            expectedDeliveryDate: PostalCalendar.arrival(after: postmark, transit: person.transit)
+            expectedDeliveryDate: PostalCalendar.arrival(after: postmark, transit: transit)
         )
         letters.append(letter)
         return letter

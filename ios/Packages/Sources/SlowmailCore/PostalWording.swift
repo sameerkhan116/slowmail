@@ -21,6 +21,19 @@ public enum PostalWording {
     }
 
     /// Deliberately vague: a weekday and a date, never a time.
+    /// Shown instead of an arrival date when the recipient has no address on
+    /// file. It says why nothing can be quoted rather than leaving a blank.
+    /// The one line that describes where a correspondent is and how long the
+    /// post takes to reach them. It lives here, in one place, so that an
+    /// unknown address cannot be rendered as a confident zero by one view and
+    /// as a blank by another.
+    public static func routing(miles: Int?, days: Int?) -> String {
+        guard let miles, let days else { return unaddressed }
+        return "\(distance(miles: miles)) · \(typicalTransit(days: days))"
+    }
+
+    public static let unaddressed = "No address on file — the post can't carry this yet"
+
     public static func expectedArrival(_ date: Date, calendar: Calendar = .postal) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar

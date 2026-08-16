@@ -413,8 +413,8 @@ struct FixtureConsistencyTests {
             let person = try #require(people[letter.correspondentID])
             let postmark = try #require(letter.postmarkDate, "\(letter.id) has no postmark")
             let expected = try #require(letter.expectedDeliveryDate, "\(letter.id) has no expected date")
-            let computed = PostalCalendar.arrival(
-                after: postmark, transit: person.transit)
+            let transit = try #require(person.transit, "\(person.name) has no address")
+            let computed = PostalCalendar.arrival(after: postmark, transit: transit)
             #expect(Calendar.postal.isDate(expected, inSameDayAs: computed),
                     "\(letter.id): expected \(expected) but the band gives \(computed)")
         }
