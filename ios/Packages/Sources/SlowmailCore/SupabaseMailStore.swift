@@ -431,7 +431,12 @@ extension LetterState {
     /// written out and exhaustive.
     init?(databaseValue: String) {
         switch databaseValue {
-        case "draft", "awaiting_collection": self = .awaitingCollection
+        // `draft` is deliberately absent. The server excludes drafts from every
+        // read the app makes, so one arriving here means that stopped being
+        // true -- and showing it as awaiting collection would tell a sender
+        // their unfinished words are on their way to someone. Failing to decode
+        // is the loud version of the same discovery.
+        case "awaiting_collection": self = .awaitingCollection
         case "in_transit": self = .inTransit
         case "delivered": self = .delivered
         case "revoked": self = .revoked

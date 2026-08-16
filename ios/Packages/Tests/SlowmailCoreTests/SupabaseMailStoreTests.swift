@@ -194,6 +194,10 @@ struct SupabaseDecodingTests {
         // Decoding by rawValue would accept none of these.
         #expect(LetterState(databaseValue: "inTransit") == nil)
         #expect(LetterState(databaseValue: "posted") == nil)
+        // A draft reaching the app means the server stopped excluding them.
+        // Mapping it to "awaiting collection" would show a sender their
+        // unfinished words as posted; refusing it makes the regression loud.
+        #expect(LetterState(databaseValue: "draft") == nil)
     }
 
     @Test("An unreadable body is an error, not an empty mailbox")
