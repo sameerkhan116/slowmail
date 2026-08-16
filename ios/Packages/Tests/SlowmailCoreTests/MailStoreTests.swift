@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import SlowmailCore
 @testable import SlowmailUI
+import MailClockKit
 
 /// A fixed instant on Thursday 20 August 2026, 15:40 New York — after that
 /// day's delivery, before that day's collection.
@@ -637,7 +638,7 @@ struct SeededHashGoldenVectors {
             ("me", 1_747_856_039),
         ]
         for (input, expected) in vectors {
-            #expect(Hashing.fnv1a(input) == expected, "fnv1a(\(input))")
+            #expect(MailClockKit.fnv1a(input) == expected, "fnv1a(\(input))")
         }
     }
 
@@ -650,11 +651,11 @@ struct SeededHashGoldenVectors {
             ("arrival", ["me", "2026-08-20"], 414_333_630, 0.096_469_565_760_344_27, 30),
         ]
         for (namespace, parts, hash, unit, ranged) in vectors {
-            #expect(Hashing.seeded(namespace, parts) == hash, "seededHash(\(namespace))")
-            let actualUnit = Hashing.unitInterval(namespace, parts)
+            #expect(MailClockKit.seededHashParts(namespace: namespace, parts: parts) == hash, "seededHash(\(namespace))")
+            let actualUnit = MailClockKit.seededUnitParts(namespace: namespace, parts: parts)
             #expect(abs(actualUnit - unit) < 1e-15, "seededUnit(\(namespace)) = \(actualUnit)")
             #expect(
-                Hashing.intInRange(0, 479, namespace, parts) == ranged,
+                (try? MailClockKit.seededIntInRange(min: 0, max: 479, namespace: namespace, parts: parts)) == ranged,
                 "seededIntInRange(\(namespace))")
         }
     }
