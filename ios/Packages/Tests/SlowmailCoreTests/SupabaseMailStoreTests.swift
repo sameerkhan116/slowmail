@@ -674,10 +674,15 @@ struct PostalDateFormatTests {
 
 /// `write_letter` is declared `returns public.letters`, so PostgREST sends one
 /// object. Every earlier test used an array and could not have seen this.
+/// A letter as it comes back from `write_letter`, which is a letter that has
+/// been posted and not yet collected. `postmark_date` is null here because the
+/// server writes it in `apply_collection` and nowhere else — a postmark is what
+/// the sorting office stamps on, so mail still in the postbox has none. The
+/// populated case is covered by `deliveredRow`, where it is real.
 private let writtenRow = """
 {"id":"l-9","sender_id":"me-uuid","recipient_id":"them-uuid","body":"Hello",
  "state":"awaiting_collection","written_at":"2026-08-20T19:40:00+00:00",
- "collected_at":null,"postmark_date":"2026-08-20","deliver_at":null,
+ "collected_at":null,"postmark_date":null,"deliver_at":null,
  "delivered_at":null,"read_at":null}
 """
 
@@ -699,7 +704,7 @@ struct SupabaseWriteTests {
         #expect(letter.isOutbound)
         #expect(letter.state == .awaitingCollection)
         #expect(letter.correspondentID == "them-uuid")
-        #expect(letter.postmarkDate != nil)
+        #expect(letter.postmarkDate == nil, "nothing is postmarked until collection")
         #expect(letter.expectedDeliveryDate == nil, "nothing is scheduled until collection")
     }
 
