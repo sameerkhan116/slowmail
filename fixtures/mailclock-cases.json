@@ -1,0 +1,192 @@
+{
+  "$comment": "Language-agnostic contract for the slowmail postal scheduler. Any port (TypeScript, Swift, SQL) must reproduce every value here exactly. Rule-derived expectations were worked out by hand from the postal rules; hash-derived values follow mechanically from FNV-1a, which is pinned against published vectors in hashVectors below.",
+
+  "parties": {
+    "nyc":       { "tz": "America/New_York",    "lat": 40.7128,  "lng": -74.0060,  "countryCode": "US", "region": "NY" },
+    "philly":    { "tz": "America/New_York",    "lat": 39.9526,  "lng": -75.1652,  "countryCode": "US", "region": "PA", "userId": "u-philly" },
+    "anchorage": { "tz": "America/Anchorage",   "lat": 61.2181,  "lng": -149.9003, "countryCode": "US", "region": "AK", "userId": "u-anchorage" },
+    "guam":      { "tz": "Pacific/Guam",        "lat": 13.4443,  "lng": 144.7937,  "countryCode": "US", "region": "GU", "isTerritory": true, "userId": "u-guam" },
+    "london":    { "tz": "Europe/London",       "lat": 51.5074,  "lng": -0.1278,   "countryCode": "GB", "userId": "u-london" },
+    "tokyo":     { "tz": "Asia/Tokyo",          "lat": 35.6762,  "lng": 139.6503,  "countryCode": "JP" },
+    "la":        { "tz": "America/Los_Angeles", "lat": 34.0522,  "lng": -118.2437, "countryCode": "US", "region": "CA", "userId": "u-la" }
+  },
+
+  "hashVectors": [
+    { "input": "",       "fnv1a": 2166136261 },
+    { "input": "a",      "fnv1a": 3826002220 },
+    { "input": "b",      "fnv1a": 3876335077 },
+    { "input": "c",      "fnv1a": 3859557458 },
+    { "input": "foobar", "fnv1a": 3214735720 }
+  ],
+
+  "observedHolidays2026": [
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-07-04", "2026-09-07",
+    "2026-10-12", "2026-11-11", "2026-11-26", "2026-12-25"
+  ],
+
+  "postalDays": [
+    { "date": "2026-08-14", "isPostalDay": true,  "why": "ordinary Friday" },
+    { "date": "2026-08-15", "isPostalDay": true,  "why": "Saturday is a delivery day" },
+    { "date": "2026-08-16", "isPostalDay": false, "why": "Sunday" },
+    { "date": "2026-08-17", "isPostalDay": true,  "why": "ordinary Monday" },
+    { "date": "2026-09-07", "isPostalDay": false, "why": "Labor Day" },
+    { "date": "2026-07-03", "isPostalDay": false, "why": "Independence Day observed (the 4th is a Saturday)" },
+    { "date": "2026-07-04", "isPostalDay": false, "why": "Independence Day itself" },
+    { "date": "2027-07-05", "isPostalDay": false, "why": "Independence Day observed (the 4th is a Sunday)" },
+    { "date": "2027-12-31", "isPostalDay": false, "why": "New Year's Day 2028 falls on a Saturday, observed the Friday before" },
+    { "date": "2026-11-26", "isPostalDay": false, "why": "Thanksgiving, fourth Thursday" },
+    { "date": "2026-05-25", "isPostalDay": false, "why": "Memorial Day, last Monday in May" }
+  ],
+
+  "transitBands": [
+    { "miles": 0,    "days": 1 },
+    { "miles": 50,   "days": 1 },
+    { "miles": 51,   "days": 2 },
+    { "miles": 300,  "days": 2 },
+    { "miles": 301,  "days": 3 },
+    { "miles": 1000, "days": 3 },
+    { "miles": 1001, "days": 4 },
+    { "miles": 1800, "days": 4 },
+    { "miles": 1801, "days": 5 },
+    { "miles": 6000, "days": 5 }
+  ],
+
+  "internationalBands": [
+    { "countryCode": "CA", "min": 7,  "max": 10 },
+    { "countryCode": "MX", "min": 7,  "max": 10 },
+    { "countryCode": "GB", "min": 8,  "max": 14 },
+    { "countryCode": "DE", "min": 8,  "max": 14 },
+    { "countryCode": "JP", "min": 10, "max": 16 },
+    { "countryCode": "AU", "min": 10, "max": 16 },
+    { "countryCode": "BR", "min": 12, "max": 21 },
+    { "countryCode": "IN", "min": 12, "max": 21 },
+    { "countryCode": "KE", "min": 14, "max": 25 },
+    { "countryCode": "ZZ", "min": 12, "max": 21 }
+  ],
+
+  "jitterBranches": [
+    { "messageId": "letter-0000", "jitter": 1 },
+    { "messageId": "letter-0001", "jitter": 1 },
+    { "messageId": "letter-0009", "jitter": -1 },
+    { "messageId": "letter-0020", "jitter": -1 },
+    { "messageId": "letter-0010", "jitter": 0 },
+    { "messageId": "letter-0011", "jitter": 0 }
+  ],
+
+  "collection": [
+    { "name": "one second before the cutoff makes today's pickup",
+      "writtenAt": "2026-08-20T16:59:59-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-08-20", "collectedAt": "2026-08-20T21:00:00.000Z" },
+    { "name": "the stroke of the cutoff misses it",
+      "writtenAt": "2026-08-20T17:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-08-21", "collectedAt": "2026-08-21T21:00:00.000Z" },
+    { "name": "Saturday morning is collected on Saturday",
+      "writtenAt": "2026-08-15T10:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-08-15", "collectedAt": "2026-08-15T21:00:00.000Z" },
+    { "name": "Saturday evening waits for Monday, skipping Sunday",
+      "writtenAt": "2026-08-15T18:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-08-17", "collectedAt": "2026-08-17T21:00:00.000Z" },
+    { "name": "Sunday waits for Monday",
+      "writtenAt": "2026-08-16T10:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-08-17", "collectedAt": "2026-08-17T21:00:00.000Z" },
+    { "name": "Saturday before Labor Day waits until Tuesday",
+      "writtenAt": "2026-09-05T18:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-09-08", "collectedAt": "2026-09-08T21:00:00.000Z" },
+    { "name": "written on Labor Day itself",
+      "writtenAt": "2026-09-07T10:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-09-08", "collectedAt": "2026-09-08T21:00:00.000Z" },
+    { "name": "Independence Day on a Saturday costs Friday and Saturday both",
+      "writtenAt": "2026-07-02T18:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-07-06", "collectedAt": "2026-07-06T21:00:00.000Z" },
+    { "name": "Independence Day on a Sunday is observed the Monday after",
+      "writtenAt": "2027-07-03T18:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2027-07-06", "collectedAt": "2027-07-06T21:00:00.000Z" },
+    { "name": "New Year's Day on a Saturday closes the previous December 31",
+      "writtenAt": "2027-12-30T18:00:00-05:00", "tz": "America/New_York",
+      "postmarkDate": "2028-01-03", "collectedAt": "2028-01-03T22:00:00.000Z" },
+    { "name": "collection on a standard-time date is an hour later in UTC",
+      "writtenAt": "2026-03-06T10:00:00-05:00", "tz": "America/New_York",
+      "postmarkDate": "2026-03-06", "collectedAt": "2026-03-06T22:00:00.000Z" },
+    { "name": "collection on a daylight-time date",
+      "writtenAt": "2026-10-30T10:00:00-04:00", "tz": "America/New_York",
+      "postmarkDate": "2026-10-30", "collectedAt": "2026-10-30T21:00:00.000Z" },
+    { "name": "sender in Tokyo keeps Tokyo's cutoff",
+      "writtenAt": "2026-08-20T10:00:00+09:00", "tz": "Asia/Tokyo",
+      "postmarkDate": "2026-08-20", "collectedAt": "2026-08-20T08:00:00.000Z" }
+  ],
+
+  "schedule": [
+    { "name": "just before the cutoff, across town",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T16:59:59-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 2, "deliveryDate": "2026-08-22", "deliverAt": "2026-08-22T13:03:00.000Z", "isInternational": false } },
+
+    { "name": "just after the cutoff loses a day and then a Sunday",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T17:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-21T21:00:00.000Z", "postmarkDate": "2026-08-21", "transitDays": 2, "deliveryDate": "2026-08-24", "deliverAt": "2026-08-24T14:57:00.000Z", "isInternational": false } },
+
+    { "name": "Saturday morning post",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-15T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-15T21:00:00.000Z", "postmarkDate": "2026-08-15", "transitDays": 2, "deliveryDate": "2026-08-18", "deliverAt": "2026-08-18T16:22:00.000Z", "isInternational": false } },
+
+    { "name": "Saturday evening post",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-15T18:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-17T21:00:00.000Z", "postmarkDate": "2026-08-17", "transitDays": 2, "deliveryDate": "2026-08-19", "deliverAt": "2026-08-19T19:21:00.000Z", "isInternational": false } },
+
+    { "name": "Sunday post",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-16T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-17T21:00:00.000Z", "postmarkDate": "2026-08-17", "transitDays": 2, "deliveryDate": "2026-08-19", "deliverAt": "2026-08-19T19:21:00.000Z", "isInternational": false } },
+
+    { "name": "transit stepping over Labor Day weekend",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-09-05T18:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-09-08T21:00:00.000Z", "postmarkDate": "2026-09-08", "transitDays": 2, "deliveryDate": "2026-09-10", "deliverAt": "2026-09-10T17:47:00.000Z", "isInternational": false } },
+
+    { "name": "written on Labor Day",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-09-07T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-09-08T21:00:00.000Z", "postmarkDate": "2026-09-08", "transitDays": 2, "deliveryDate": "2026-09-10", "deliverAt": "2026-09-10T17:47:00.000Z", "isInternational": false } },
+
+    { "name": "Independence Day on a Saturday",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-07-02T18:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-07-06T21:00:00.000Z", "postmarkDate": "2026-07-06", "transitDays": 2, "deliveryDate": "2026-07-08", "deliverAt": "2026-07-08T16:24:00.000Z", "isInternational": false } },
+
+    { "name": "Independence Day on a Sunday",
+      "input": { "messageId": "letter-0010", "writtenAt": "2027-07-03T18:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2027-07-06T21:00:00.000Z", "postmarkDate": "2027-07-06", "transitDays": 2, "deliveryDate": "2027-07-08", "deliverAt": "2027-07-08T14:31:00.000Z", "isInternational": false } },
+
+    { "name": "New Year's Day on a Saturday",
+      "input": { "messageId": "letter-0010", "writtenAt": "2027-12-30T18:00:00-05:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2028-01-03T22:00:00.000Z", "postmarkDate": "2028-01-03", "transitDays": 2, "deliveryDate": "2028-01-05", "deliverAt": "2028-01-05T21:31:00.000Z", "isInternational": false } },
+
+    { "name": "collected in standard time, delivered in daylight time",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-03-06T10:00:00-05:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-03-06T22:00:00.000Z", "postmarkDate": "2026-03-06", "transitDays": 2, "deliveryDate": "2026-03-09", "deliverAt": "2026-03-09T17:27:00.000Z", "isInternational": false } },
+
+    { "name": "collected in daylight time, delivered in standard time",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-10-30T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-10-30T21:00:00.000Z", "postmarkDate": "2026-10-30", "transitDays": 2, "deliveryDate": "2026-11-02", "deliverAt": "2026-11-02T21:03:00.000Z", "isInternational": false } },
+
+    { "name": "a letter that runs a day late",
+      "input": { "messageId": "letter-0000", "writtenAt": "2026-08-20T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 3, "deliveryDate": "2026-08-24", "deliverAt": "2026-08-24T14:57:00.000Z", "isInternational": false } },
+
+    { "name": "a letter that runs a day early",
+      "input": { "messageId": "letter-0009", "writtenAt": "2026-08-20T10:00:00-04:00", "sender": "nyc", "recipient": "philly" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 1, "deliveryDate": "2026-08-21", "deliverAt": "2026-08-21T16:02:00.000Z", "isInternational": false } },
+
+    { "name": "Alaska prices as the far zone regardless of the miles",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T10:00:00-04:00", "sender": "nyc", "recipient": "anchorage" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 5, "deliveryDate": "2026-08-26", "deliverAt": "2026-08-27T00:11:00.000Z", "isInternational": false } },
+
+    { "name": "a territory runs slower than any zone",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T10:00:00-04:00", "sender": "nyc", "recipient": "guam" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 7, "deliveryDate": "2026-08-28", "deliverAt": "2026-08-28T06:33:00.000Z", "isInternational": false } },
+
+    { "name": "New York to London counts calendar days, not postal days",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T10:00:00-04:00", "sender": "nyc", "recipient": "london" },
+      "expected": { "collectedAt": "2026-08-20T21:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 13, "deliveryDate": "2026-09-02", "deliverAt": "2026-09-02T10:00:00.000Z", "isInternational": true } },
+
+    { "name": "Tokyo to Los Angeles, crossing the date line",
+      "input": { "messageId": "letter-0010", "writtenAt": "2026-08-20T10:00:00+09:00", "sender": "tokyo", "recipient": "la" },
+      "expected": { "collectedAt": "2026-08-20T08:00:00.000Z", "postmarkDate": "2026-08-20", "transitDays": 16, "deliveryDate": "2026-09-05", "deliverAt": "2026-09-05T23:46:00.000Z", "isInternational": true } }
+  ]
+}
