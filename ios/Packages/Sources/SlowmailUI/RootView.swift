@@ -68,10 +68,10 @@ public struct RootView: View {
                 body: draftBinding(for: person.id),
                 recipient: person,
                 nextCollection: PostalCalendar.nextCollection(after: model.now),
-                estimatedArrival: PostalCalendar.arrival(
-                    after: PostalCalendar.nextCollection(after: model.now),
-                    transit: person.transit
-                ),
+                estimatedArrival: person.transit.map {
+                    PostalCalendar.arrival(
+                        after: PostalCalendar.nextCollection(after: model.now), transit: $0)
+                },
                 now: model.now,
                 isPosting: isPosting,
                 alreadyPosted: drafts.isAlreadyPosted(person.id),

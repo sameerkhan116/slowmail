@@ -28,9 +28,9 @@ public struct CorrespondentsView: View {
                                         Text(person.cityLabel)
                                             .font(Theme.Typeface.supporting)
                                             .foregroundStyle(Theme.Palette.inkFaint)
-                                        PostmarkLabel(
-                                            "\(PostalWording.distance(miles: person.milesAway)) · \(PostalWording.typicalTransit(days: person.typicalTransitDays))"
-                                        )
+                                        PostmarkLabel(PostalWording.routing(
+                                            miles: person.milesAway,
+                                            days: person.typicalTransitDays))
                                     }
                                 }
                             }
@@ -75,7 +75,8 @@ public struct CorrespondenceView: View {
                         Text(person.cityLabel)
                             .font(Theme.Typeface.supporting)
                             .foregroundStyle(Theme.Palette.inkFaint)
-                        PostmarkLabel(PostalWording.typicalTransit(days: person.typicalTransitDays))
+                        PostmarkLabel(PostalWording.routing(
+                            miles: person.milesAway, days: person.typicalTransitDays))
                     }
 
                     VStack(spacing: Theme.Space.regular) {

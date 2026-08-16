@@ -23,20 +23,29 @@ public struct Correspondent: Sendable, Identifiable, Hashable, Codable {
     /// City-level only. We never ask for or store a street address.
     public let cityLabel: String
     public let timeZoneIdentifier: String
-    public let milesAway: Int
+    /// Nil when the person has no address on file. See `transit`.
+    public let milesAway: Int?
     /// Typical one-way transit, for setting expectations before you write.
-    public let transit: Transit
+    ///
+    /// Nil when we do not know where this person lives. A profile may carry no
+    /// coordinates at all, and the post office refuses to route to one — so
+    /// there is no number to quote, and quoting a plausible one would be worse
+    /// than quoting none.
+    public let transit: Transit?
 
     /// For display only. The unit is what matters to the arithmetic.
-    public var typicalTransitDays: Int { transit.days }
+    public var typicalTransitDays: Int? { transit?.days }
+
+    /// Whether the post office can carry a letter to this person at all.
+    public var isReachable: Bool { transit != nil }
 
     public init(
         id: CorrespondentID,
         name: String,
         cityLabel: String,
         timeZoneIdentifier: String,
-        milesAway: Int,
-        transit: Transit
+        milesAway: Int?,
+        transit: Transit?
     ) {
         self.id = id
         self.name = name
@@ -119,4 +128,15 @@ public enum MailStoreError: Error, Sendable, Equatable {
     case unknownLetter(LetterID)
     case unknownCorrespondent(CorrespondentID)
     case emptyBody
+    /// The post office refused to say more than that this isn't yours. It
+    /// deliberately does not distinguish "no such letter" from "not yours",
+    /// because the difference is itself information about someone else's mail.
+    case notFound
+    case notACorrespondent
+    /// One side has no address the routing rules can work with.
+    case noRoutableAddress
+    case notPermitted
+    case unreachable
+    case malformedResponse
+    case serverRefused(String)
 }
