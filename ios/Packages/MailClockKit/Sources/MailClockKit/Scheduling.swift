@@ -39,6 +39,21 @@ public func nextCollection(
     return Collection(at: formatInstant(collectedAt), postmarkDate: postmarkDate)
 }
 
+/// The moment a given recipient's carrier reaches them on a given day.
+///
+/// Seeded on the person and the date, so the app can ask twice and get the same
+/// answer.
+///
+/// The *minute* is seeded, but the instant is not: turning 13:52 into a point in
+/// time needs `timeZone`, and a different zone gives a different point. Callers
+/// holding several letters for one recipient on one date must pass the same zone
+/// for all of them, or those letters land hours apart and the recipient watches
+/// the post arrive twice.
+///
+/// That is a real hazard wherever the zone is stored per letter rather than per
+/// person — a recipient who moves between two postings ends up with two
+/// snapshots of the same date. Resolve the zone once per recipient per date and
+/// reuse it; do not pass a zone that travels with the letter.
 public func carrierArrival(
     userId: String,
     localDate: String,

@@ -307,3 +307,33 @@ private func scheduleFixtures() throws {
     }
     #expect(executed == fixtures.schedule.count)
 }
+
+@Suite("The arrival bundle depends on a single zone")
+struct ArrivalZoneDependence {
+
+    /// Asking twice with the same zone tests only what the seed already
+    /// guarantees. The property callers need is that they resolved the
+    /// recipient's zone once — this is what they get when they didn't.
+    @Test("Two zones for one recipient on one date are hours apart")
+    func zonesDiverge() throws {
+        let east = try carrierArrival(
+            userId: "u-moved", localDate: "2026-11-01", timeZone: "America/New_York")
+        let west = try carrierArrival(
+            userId: "u-moved", localDate: "2026-11-01", timeZone: "America/Los_Angeles")
+        #expect(east != west)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let e = try #require(iso.date(from: east))
+        let w = try #require(iso.date(from: west))
+        #expect(abs(w.timeIntervalSince(e)) == 3 * 3600)
+
+        // The seeded minute itself did not move.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        var west_ = Calendar(identifier: .gregorian)
+        west_.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        #expect(cal.dateComponents([.hour, .minute], from: e)
+            == west_.dateComponents([.hour, .minute], from: w))
+    }
+}
