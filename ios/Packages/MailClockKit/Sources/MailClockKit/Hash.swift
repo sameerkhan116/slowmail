@@ -28,11 +28,11 @@ public func seededIntInRange(
     return min + Int(seededHashParts(namespace: namespace, parts: parts) % span)
 }
 
-private func seededHashParts(namespace: String, parts: [String]) -> UInt32 {
+public func seededHashParts(namespace: String, parts: [String]) -> UInt32 {
     fnv1a(([namespace] + parts).joined(separator: "\u{0}"))
 }
 
-func seededIntInRange(
+public func seededIntInRange(
     min: Int,
     max: Int,
     namespace: String,
@@ -45,6 +45,6 @@ func seededIntInRange(
     return min + Int(seededHashParts(namespace: namespace, parts: parts) % span)
 }
 
-func seededUnitParts(namespace: String, parts: [String]) -> Double {
+public func seededUnitParts(namespace: String, parts: [String]) -> Double {
     Double(seededHashParts(namespace: namespace, parts: parts)) / 4_294_967_296
 }

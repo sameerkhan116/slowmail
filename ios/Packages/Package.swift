@@ -8,10 +8,25 @@ let package = Package(
         .library(name: "SlowmailCore", targets: ["SlowmailCore"]),
         .library(name: "SlowmailUI", targets: ["SlowmailUI"]),
     ],
+    dependencies: [
+        .package(path: "MailClockKit"),
+    ],
     targets: [
-        .target(name: "SlowmailCore"),
+        .target(
+            name: "SlowmailCore",
+            dependencies: [
+                .product(name: "MailClockKit", package: "MailClockKit"),
+            ]
+        ),
         .target(name: "SlowmailUI", dependencies: ["SlowmailCore"]),
         .executableTarget(name: "Screenshots", dependencies: ["SlowmailUI", "SlowmailCore"]),
-        .testTarget(name: "SlowmailCoreTests", dependencies: ["SlowmailCore", "SlowmailUI"]),
+        .testTarget(
+            name: "SlowmailCoreTests",
+            dependencies: [
+                "SlowmailCore",
+                "SlowmailUI",
+                .product(name: "MailClockKit", package: "MailClockKit"),
+            ]
+        ),
     ]
 )
