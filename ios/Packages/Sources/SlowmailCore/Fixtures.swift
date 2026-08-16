@@ -39,13 +39,13 @@ public struct Fixtures: Sendable {
     public static let demo = Fixtures(
         correspondents: [
             .init(id: "c-amara", name: "Amara Okafor", cityLabel: "Brooklyn, New York",
-                  timeZoneIdentifier: "America/New_York", milesAway: 6, typicalTransitDays: 1),
+                  timeZoneIdentifier: "America/New_York", milesAway: 6, transit: .domestic(1)),
             .init(id: "c-ben", name: "Ben Alvarez", cityLabel: "Austin, Texas",
-                  timeZoneIdentifier: "America/Chicago", milesAway: 1_510, typicalTransitDays: 4),
+                  timeZoneIdentifier: "America/Chicago", milesAway: 1_510, transit: .domestic(4)),
             .init(id: "c-nour", name: "Nour Haddad", cityLabel: "London, England",
-                  timeZoneIdentifier: "Europe/London", milesAway: 3_461, typicalTransitDays: 11),
+                  timeZoneIdentifier: "Europe/London", milesAway: 3_461, transit: .international(10)),
             .init(id: "c-kenji", name: "Kenji Watanabe", cityLabel: "Kyoto, Japan",
-                  timeZoneIdentifier: "Asia/Tokyo", milesAway: 6_750, typicalTransitDays: 14),
+                  timeZoneIdentifier: "Asia/Tokyo", milesAway: 6_750, transit: .international(14)),
         ],
         letters: [
             // Arrived in today's post, unread. This is what the mailbox shows.
@@ -59,8 +59,8 @@ public struct Fixtures: Sendable {
 
                   Tell me about the move. All of it, not the summary.
                   """,
-                  state: .delivered, writtenAt: at(14, 11), collectedAt: at(14, 17),
-                  postmarkDate: at(14, 17), expectedDeliveryDate: at(20, 13),
+                  state: .delivered, writtenAt: at(15, 11), collectedAt: at(15, 17),
+                  postmarkDate: at(15, 17), expectedDeliveryDate: at(20, 13),
                   deliveredAt: at(20, 13, 27)),
 
             .init(id: "l-002", correspondentID: "c-nour", isOutbound: false,
@@ -70,15 +70,15 @@ public struct Fixtures: Sendable {
 
                   Your last letter took eleven days. I kept checking the mat like a dog.
                   """,
-                  state: .delivered, writtenAt: at(6, 9), collectedAt: at(6, 17),
-                  postmarkDate: at(6, 17), expectedDeliveryDate: at(20, 13),
+                  state: .delivered, writtenAt: at(10, 9), collectedAt: at(10, 17),
+                  postmarkDate: at(10, 17), expectedDeliveryDate: at(20, 13),
                   deliveredAt: at(20, 13, 27)),
 
             // Read a few days ago; gives Correspondence something to show.
             .init(id: "l-003", correspondentID: "c-ben", isOutbound: false,
                   body: "Short one — the car died outside Waco and I have opinions about it now.",
-                  state: .delivered, writtenAt: at(4, 10), collectedAt: at(4, 17),
-                  postmarkDate: at(4, 17), expectedDeliveryDate: at(10, 12),
+                  state: .delivered, writtenAt: at(5, 10), collectedAt: at(5, 17),
+                  postmarkDate: at(5, 17), expectedDeliveryDate: at(10, 12),
                   deliveredAt: at(10, 12, 14), readAt: at(10, 19)),
 
             .init(id: "l-004", correspondentID: "c-amara", isOutbound: false,
@@ -106,7 +106,7 @@ public struct Fixtures: Sendable {
             .init(id: "l-007", correspondentID: "c-amara", isOutbound: true,
                   body: "Saturday works. I'll bring the book I keep failing to describe to you.",
                   state: .inTransit, writtenAt: at(19, 9), collectedAt: at(19, 17),
-                  postmarkDate: at(19, 17), expectedDeliveryDate: at(21, 14)),
+                  postmarkDate: at(19, 17), expectedDeliveryDate: at(20, 14)),
         ]
     )
 

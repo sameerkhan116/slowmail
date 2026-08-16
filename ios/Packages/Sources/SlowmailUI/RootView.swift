@@ -2,10 +2,15 @@ import SwiftUI
 import SlowmailCore
 
 public struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model: AppModel
     @State private var openLetter: Letter?
     @State private var composing: Correspondent?
-    @State private var draftBody: String = ""
+    /// Kept per correspondent. One shared buffer would carry a half-written
+    /// letter for one person into the composer for another, which is the one
+    /// mistake this app has no way to undo once the box is emptied.
+    @State private var drafts: [CorrespondentID: String] = [:]
+    @State private var isPosting = false
 
     public init(store: any MailStore, clock: any Clock) {
         _model = State(initialValue: AppModel(store: store, clock: clock))
@@ -21,6 +26,13 @@ public struct RootView: View {
                 .tabItem { Label("People", systemImage: "person.2") }
         }
         .task { await model.load() }
+        // The interesting moments in this app happen while nobody is looking:
+        // five o'clock passes, the carrier comes. Without this the mailbox shown
+        // at nine in the morning is still on screen at six in the evening.
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await model.load() }
+        }
         .sheet(item: $openLetter) { letter in
             LetterReaderView(
                 letter: letter,
@@ -35,23 +47,40 @@ public struct RootView: View {
         }
         .sheet(item: $composing) { person in
             WriteView(
-                body: $draftBody,
+                body: draftBinding(for: person.id),
                 recipient: person,
                 nextCollection: PostalCalendar.nextCollection(after: model.now),
-                estimatedArrival: PostalCalendar.addingPostalDays(
-                    person.typicalTransitDays,
-                    to: PostalCalendar.nextCollection(after: model.now)
+                estimatedArrival: PostalCalendar.arrival(
+                    after: PostalCalendar.nextCollection(after: model.now),
+                    transit: person.transit
                 ),
-                onPost: {
-                    let draft = Draft(correspondentID: person.id, body: draftBody)
-                    Task {
-                        if await model.post(draft) != nil {
-                            draftBody = ""
-                            composing = nil
-                        }
-                    }
-                }
+                isPosting: isPosting,
+                onPost: { post(to: person) }
             )
+        }
+    }
+
+    private func draftBinding(for id: CorrespondentID) -> Binding<String> {
+        Binding(
+            get: { drafts[id] ?? "" },
+            set: { drafts[id] = $0 }
+        )
+    }
+
+    /// Guarded because a second tap while the first post is in flight would put
+    /// two copies of the same letter in the box, and neither can be recalled
+    /// after five.
+    private func post(to person: Correspondent) {
+        guard !isPosting else { return }
+        let body = drafts[person.id] ?? ""
+        isPosting = true
+        Task {
+            defer { isPosting = false }
+            if await model.post(Draft(correspondentID: person.id, body: body)) != nil {
+                drafts[person.id] = nil
+                composing = nil
+            }
+            // On failure the draft is left exactly where it was.
         }
     }
 
@@ -73,6 +102,7 @@ public struct RootView: View {
         OutboxView(
             letters: model.outbox,
             people: peopleByID,
+            now: model.now,
             onRevoke: { letter in Task { await model.revoke(letter.id) } }
         )
     }

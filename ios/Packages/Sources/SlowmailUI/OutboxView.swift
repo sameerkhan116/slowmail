@@ -9,15 +9,18 @@ import SlowmailCore
 public struct OutboxView: View {
     private let letters: [Letter]
     private let people: [CorrespondentID: Correspondent]
+    private let now: Date
     private let onRevoke: (Letter) -> Void
 
     public init(
         letters: [Letter],
         people: [CorrespondentID: Correspondent],
+        now: Date,
         onRevoke: @escaping (Letter) -> Void = { _ in }
     ) {
         self.letters = letters
         self.people = people
+        self.now = now
         self.onRevoke = onRevoke
     }
 
@@ -38,6 +41,7 @@ public struct OutboxView: View {
                                 OutboundRow(
                                     letter: letter,
                                     to: people[letter.correspondentID],
+                                    now: now,
                                     onRevoke: { onRevoke(letter) }
                                 )
                             }
@@ -54,11 +58,13 @@ public struct OutboxView: View {
 public struct OutboundRow: View {
     private let letter: Letter
     private let to: Correspondent?
+    private let now: Date
     private let onRevoke: () -> Void
 
-    public init(letter: Letter, to: Correspondent?, onRevoke: @escaping () -> Void = {}) {
+    public init(letter: Letter, to: Correspondent?, now: Date, onRevoke: @escaping () -> Void = {}) {
         self.letter = letter
         self.to = to
+        self.now = now
         self.onRevoke = onRevoke
     }
 
@@ -75,7 +81,7 @@ public struct OutboundRow: View {
                 if let expected = letter.expectedDeliveryDate {
                     PostmarkLabel(PostalWording.expectedArrival(expected))
                 }
-                if letter.isRevocable {
+                if letter.isRevocable(asOf: now) {
                     Button("Fetch it back", action: onRevoke)
                         .buttonStyle(.plain)
                         .font(Theme.Typeface.sectionTitle)
@@ -96,11 +102,7 @@ public struct OutboundRow: View {
         switch letter.state {
         case .awaitingCollection:
             guard let postmark = letter.postmarkDate else { return "Waiting for collection" }
-            let formatter = DateFormatter()
-            formatter.calendar = .postal
-            formatter.timeZone = Calendar.postal.timeZone
-            formatter.dateFormat = "EEEE 'at' h a"
-            return "Collected \(formatter.string(from: postmark).lowercased())"
+            return PostalWording.collection(postmark, asOf: now)
         case .inTransit:
             return letter.postmarkDate.map { PostalWording.postmark($0) } ?? "In transit"
         case .delivered:

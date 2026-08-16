@@ -36,14 +36,22 @@ public enum PostalWording {
         return "Arrived \(formatter.string(from: date))"
     }
 
-    /// The collection deadline, which is the only precise time the app ever shows —
-    /// because it is a deadline the user can act on, not a prediction.
-    public static func collectionDeadline(_ date: Date, calendar: Calendar = .postal) -> String {
+    /// Collection is the only precise time the app ever shows, because it is a
+    /// deadline the sender can still act on rather than a prediction. Tense
+    /// follows the clock: a letter still sitting in the postbox offers to be
+    /// fetched back, so describing it as already collected contradicts itself.
+    public static func collection(_ date: Date, asOf now: Date, calendar: Calendar = .postal)
+        -> String
+    {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "EEEE"
+        let day = formatter.string(from: date)
         formatter.dateFormat = "h a"
-        return "Collected at \(formatter.string(from: date).lowercased())"
+        let time = formatter.string(from: date).lowercased()
+        let when = "\(day) at \(time)"
+        return now < date ? "Goes out \(when)" : "Collected \(when)"
     }
 
     public static func distance(miles: Int) -> String {
@@ -67,5 +75,5 @@ public enum PostalWording {
     public static let nothingComingToday = "No mail today."
     public static let emptyMailboxDetail = "Nothing was posted to you in time for today's round."
     public static let postNotHereYet = "The post hasn't come yet."
-    public static let emptyMailboxWaitingDetail = "The carrier is still out. Whatever is coming will be here by five."
+    public static let emptyMailboxWaitingDetail = "The carrier is still out on today's round."
 }

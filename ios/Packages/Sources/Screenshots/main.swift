@@ -91,7 +91,10 @@ MainActor.assumeIsolated {
     }
 
     render("mailbox-empty") {
-        MailboxView(letters: [], people: people, now: now, carrierExpected: now.addingTimeInterval(3_600))
+        MailboxView(
+            letters: [], people: people, now: now,
+            carrierExpected: PostalCalendar.carrierArrival(forRecipient: "me", on: now)
+        )
     }
 
     render("reader") {
@@ -109,7 +112,8 @@ MainActor.assumeIsolated {
             ),
             recipient: people["c-ben"],
             nextCollection: PostalCalendar.nextCollection(after: now),
-            estimatedArrival: PostalCalendar.addingPostalDays(4, to: PostalCalendar.nextCollection(after: now))
+            estimatedArrival: PostalCalendar.arrival(
+                after: PostalCalendar.nextCollection(after: now), transit: .domestic(4))
         )
     }
 
@@ -118,11 +122,12 @@ MainActor.assumeIsolated {
             body: .constant(""),
             recipient: people["c-kenji"],
             nextCollection: PostalCalendar.nextCollection(after: now),
-            estimatedArrival: PostalCalendar.addingPostalDays(14, to: PostalCalendar.nextCollection(after: now))
+            estimatedArrival: PostalCalendar.arrival(
+                after: PostalCalendar.nextCollection(after: now), transit: .international(14))
         )
     }
 
-    render("outbox") { OutboxView(letters: outbound, people: people) }
+    render("outbox") { OutboxView(letters: outbound, people: people, now: now) }
 
     render("correspondents") { CorrespondentsView(people: fixtures.correspondents) }
 

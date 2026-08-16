@@ -9,11 +9,13 @@ public actor MockMailStore: MailStore {
     private var letters: [Letter]
     private var people: [Correspondent]
     private let clock: any Clock
+    private let userID: String
 
-    public init(clock: any Clock, fixtures: Fixtures = .demo) {
+    public init(clock: any Clock, fixtures: Fixtures = .demo, userID: String = "me") {
         self.clock = clock
         self.letters = fixtures.letters
         self.people = fixtures.correspondents
+        self.userID = userID
     }
 
     // MARK: Reading
@@ -29,12 +31,13 @@ public actor MockMailStore: MailStore {
 
     public func outbox() async throws -> [Letter] {
         letters
+            .map(collected)
             .filter { $0.isOutbound && ($0.state == .awaitingCollection || $0.state == .inTransit) }
             .sorted { $0.writtenAt < $1.writtenAt }
     }
 
     public func correspondence(with correspondentID: CorrespondentID) async throws -> [Letter] {
-        (delivered() + letters.filter { $0.isOutbound })
+        (delivered() + letters.filter { $0.isOutbound }.map(collected))
             .filter { $0.correspondentID == correspondentID && $0.state != .revoked }
             .sorted { $0.sortDate < $1.sortDate }
     }
@@ -50,12 +53,17 @@ public actor MockMailStore: MailStore {
         return match
     }
 
+    /// When the carrier is next expected here, or nil once they have been.
+    ///
+    /// Derived from the round, never from the mail. Deriving it from pending
+    /// letters would mean the answer is non-nil only when something is actually
+    /// coming, and a recipient could read that difference off the empty state to
+    /// learn a letter exists before it was delivered.
     public func carrierExpected(on day: Date) async throws -> Date? {
-        letters
-            .filter { !$0.isOutbound && $0.state == .delivered }
-            .compactMap(\.deliveredAt)
-            .filter { Calendar.postal.isDate($0, inSameDayAs: day) && $0 > clock.now }
-            .min()
+        guard let arrival = PostalCalendar.carrierArrival(forRecipient: userID, on: day) else {
+            return nil
+        }
+        return arrival > clock.now ? arrival : nil
     }
 
     // MARK: Writing
@@ -79,7 +87,7 @@ public actor MockMailStore: MailStore {
             state: .awaitingCollection,
             writtenAt: now,
             postmarkDate: postmark,
-            expectedDeliveryDate: PostalCalendar.addingPostalDays(person.typicalTransitDays, to: postmark)
+            expectedDeliveryDate: PostalCalendar.arrival(after: postmark, transit: person.transit)
         )
         letters.append(letter)
         return letter
@@ -90,8 +98,9 @@ public actor MockMailStore: MailStore {
             throw MailStoreError.unknownLetter(id)
         }
         // The one irreversible moment in the product. Once the box is emptied,
-        // there is nothing to take back.
-        guard letters[index].state == .awaitingCollection else {
+        // there is nothing to take back. Checked against the clock rather than
+        // stored state, because nothing in a mock advances a letter at five.
+        guard letters[index].isRevocable(asOf: clock.now) else {
             throw MailStoreError.alreadyCollected
         }
         letters[index] = letters[index].with(state: .revoked)
@@ -107,6 +116,15 @@ public actor MockMailStore: MailStore {
 
     // MARK: Internals
 
+    /// A letter whose collection time has passed is in the post, whether or not
+    /// anything got round to writing that down.
+    private func collected(_ letter: Letter) -> Letter {
+        guard letter.state == .awaitingCollection,
+              let postmark = letter.postmarkDate,
+              clock.now >= postmark else { return letter }
+        return letter.with(state: .inTransit, collectedAt: postmark)
+    }
+
     /// Inbound mail is invisible until the carrier has actually been.
     private func delivered() -> [Letter] {
         letters.filter { letter in
@@ -120,7 +138,7 @@ public actor MockMailStore: MailStore {
 private extension Letter {
     var sortDate: Date { deliveredAt ?? postmarkDate ?? writtenAt }
 
-    func with(state: LetterState? = nil, readAt: Date? = nil) -> Letter {
+    func with(state: LetterState? = nil, collectedAt: Date? = nil, readAt: Date? = nil) -> Letter {
         Letter(
             id: id,
             correspondentID: correspondentID,
@@ -128,7 +146,7 @@ private extension Letter {
             body: body,
             state: state ?? self.state,
             writtenAt: writtenAt,
-            collectedAt: collectedAt,
+            collectedAt: collectedAt ?? self.collectedAt,
             postmarkDate: postmarkDate,
             expectedDeliveryDate: expectedDeliveryDate,
             deliveredAt: deliveredAt,

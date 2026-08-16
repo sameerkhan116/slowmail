@@ -25,7 +25,10 @@ public struct Correspondent: Sendable, Identifiable, Hashable, Codable {
     public let timeZoneIdentifier: String
     public let milesAway: Int
     /// Typical one-way transit, for setting expectations before you write.
-    public let typicalTransitDays: Int
+    public let transit: Transit
+
+    /// For display only. The unit is what matters to the arithmetic.
+    public var typicalTransitDays: Int { transit.days }
 
     public init(
         id: CorrespondentID,
@@ -33,14 +36,14 @@ public struct Correspondent: Sendable, Identifiable, Hashable, Codable {
         cityLabel: String,
         timeZoneIdentifier: String,
         milesAway: Int,
-        typicalTransitDays: Int
+        transit: Transit
     ) {
         self.id = id
         self.name = name
         self.cityLabel = cityLabel
         self.timeZoneIdentifier = timeZoneIdentifier
         self.milesAway = milesAway
-        self.typicalTransitDays = typicalTransitDays
+        self.transit = transit
     }
 }
 
@@ -86,7 +89,18 @@ public struct Letter: Sendable, Identifiable, Hashable, Codable {
     }
 
     public var isUnread: Bool { !isOutbound && state == .delivered && readAt == nil }
-    public var isRevocable: Bool { isOutbound && state == .awaitingCollection }
+
+    /// Whether the letter can still be fetched back.
+    ///
+    /// Takes the current instant rather than reading stored state alone: a
+    /// letter written this afternoon is still marked `.awaitingCollection` until
+    /// something advances it, and without the clock it would stay revocable long
+    /// after five o'clock had passed and the box had been emptied.
+    public func isRevocable(asOf now: Date) -> Bool {
+        guard isOutbound, state == .awaitingCollection else { return false }
+        guard let postmarkDate else { return true }
+        return now < postmarkDate
+    }
 }
 
 public struct Draft: Sendable, Hashable {

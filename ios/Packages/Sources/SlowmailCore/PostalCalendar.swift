@@ -21,6 +21,9 @@ public extension Calendar {
 /// holiday rules that can drift from the server's is not.
 public enum PostalCalendar {
     public static let collectionHour = 17
+    /// The carrier's round. Officially 08:00-20:00; in practice this.
+    public static let earliestDeliveryHour = 9
+    public static let latestDeliveryHour = 17
 
     public static func isPostalDay(_ date: Date, calendar: Calendar = .postal) -> Bool {
         calendar.component(.weekday, from: date) != 1
@@ -47,5 +50,41 @@ public enum PostalCalendar {
         var cursor = date
         for _ in 0..<max(0, count) { cursor = nextPostalDay(after: cursor, calendar: calendar) }
         return cursor
+    }
+}
+
+public extension PostalCalendar {
+    /// When mail collected at `collection` should land.
+    static func arrival(after collection: Date, transit: Transit, calendar: Calendar = .postal) -> Date {
+        switch transit.unit {
+        case .postalDays:
+            return addingPostalDays(transit.days, to: collection, calendar: calendar)
+        case .calendarDays:
+            let raw = calendar.date(byAdding: .day, value: max(0, transit.days), to: collection) ?? collection
+            // However far it has come, it still cannot be delivered on a Sunday.
+            return isPostalDay(raw, calendar: calendar) ? raw : nextPostalDay(after: raw, calendar: calendar)
+        }
+    }
+
+    /// When the carrier reaches an address on a given day, or nil if they don't.
+    ///
+    /// Seeded on the address and the date and nothing else — deliberately not on
+    /// what is in the bag. If this were derived from pending mail, the app could
+    /// only say "the carrier hasn't been yet" when something was actually coming,
+    /// and that difference would tell a recipient a letter exists before it has
+    /// been delivered. The whole privacy guarantee leaks through an empty state.
+    static func carrierArrival(
+        forRecipient recipientID: String,
+        on day: Date,
+        calendar: Calendar = .postal
+    ) -> Date? {
+        guard isPostalDay(day, calendar: calendar) else { return nil }
+        let start = calendar.startOfDay(for: day)
+        let components = calendar.dateComponents([.year, .month, .day], from: start)
+        let key = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        let fraction = Hashing.unitInterval("arrival", recipientID, key)
+        let windowSeconds = (latestDeliveryHour - earliestDeliveryHour) * 3_600
+        let offset = earliestDeliveryHour * 3_600 + Int(fraction * Double(windowSeconds))
+        return calendar.date(byAdding: .second, value: offset, to: start)
     }
 }

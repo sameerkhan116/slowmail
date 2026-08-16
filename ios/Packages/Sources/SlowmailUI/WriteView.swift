@@ -12,6 +12,7 @@ public struct WriteView: View {
     private let recipient: Correspondent?
     private let nextCollection: Date
     private let estimatedArrival: Date
+    private let isPosting: Bool
     private let onPost: () -> Void
     private let onPickRecipient: () -> Void
 
@@ -20,6 +21,7 @@ public struct WriteView: View {
         recipient: Correspondent?,
         nextCollection: Date,
         estimatedArrival: Date,
+        isPosting: Bool = false,
         onPost: @escaping () -> Void = {},
         onPickRecipient: @escaping () -> Void = {}
     ) {
@@ -27,6 +29,7 @@ public struct WriteView: View {
         self.recipient = recipient
         self.nextCollection = nextCollection
         self.estimatedArrival = estimatedArrival
+        self.isPosting = isPosting
         self.onPost = onPost
         self.onPickRecipient = onPickRecipient
     }
@@ -110,7 +113,7 @@ public struct WriteView: View {
 
     private var postButton: some View {
         Button(action: onPost) {
-            Text("Post")
+            Text(isPosting ? "Posting" : "Post")
                 .font(Theme.Typeface.sectionTitle)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Space.snug)
@@ -123,6 +126,7 @@ public struct WriteView: View {
     }
 
     private var canPost: Bool {
-        recipient != nil && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !isPosting && recipient != nil
+            && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
