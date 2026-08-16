@@ -7,19 +7,41 @@ import SlowmailUI
 @main
 struct SlowmailApp: App {
     private let clock = SystemClock()
-    private let configuration = (try? MailStoreConfiguration.resolve()) ?? .demo
 
     var body: some Scene {
         WindowGroup {
-            // No sign-in screen exists yet, so a configured server has no
-            // session to present and `store` throws. Falling back to fixtures
-            // here is deliberate and visible: the demo says plainly that it is
-            // holding letters with this device's clock.
-            if let store = try? configuration.store(clock: clock) {
+            switch Self.start(clock: clock) {
+            case let .running(store, isDemo):
                 RootView(store: store, clock: clock)
-            } else {
-                RootView(store: MockMailStore(clock: clock), clock: clock)
+                    .demoBanner(isDemo)
+            case let .misconfigured(reason):
+                // Deliberately not a fallback to fixtures. A build that meant
+                // to reach the post office and quietly served made-up letters
+                // instead would be indistinguishable, from inside the app, from
+                // one that worked.
+                ConfigurationFailureView(reason: reason)
             }
+        }
+    }
+
+    enum Start {
+        case running(store: any MailStore, isDemo: Bool)
+        case misconfigured(reason: String)
+    }
+
+    static func start(clock: any Clock) -> Start {
+        do {
+            let configuration = try MailStoreConfiguration.resolve(
+                environment: ProcessInfo.processInfo.environment,
+                bundle: Bundle.main.slowmailConfiguration)
+            // No sign-in screen exists yet, so a configured server has no
+            // session to present. That is a missing feature, not a reason to
+            // show someone fixtures and call it their mail.
+            return .running(
+                store: try configuration.store(clock: clock),
+                isDemo: configuration == .demo)
+        } catch {
+            return .misconfigured(reason: MailStoreConfiguration.explain(error))
         }
     }
 }

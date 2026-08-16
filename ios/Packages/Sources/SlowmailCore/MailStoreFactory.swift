@@ -20,12 +20,19 @@ public enum MailStoreConfiguration: Sendable, Equatable {
     /// Read from the environment first so a debug run can point somewhere, then
     /// the bundle's Info.plist, which is how a shipped build is configured.
     ///
+    /// Neither argument has a default, deliberately. `bundle` used to default
+    /// to an empty dictionary, which meant the documented Info.plist keys were
+    /// never read by anything that ships and every build quietly ran on
+    /// fixtures. A test could only have caught that by observing a default it
+    /// cannot see, so the default is gone instead: every caller now names where
+    /// its configuration comes from, and the old bug will not compile.
+    ///
     /// A half-configuration — a URL with no key, or a key with no URL — is
     /// `nil` rather than `demo`, because it means somebody intended to reach a
     /// server and the build should not quietly stop trying.
     public static func resolve(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        bundle: [String: String] = [:]
+        environment: [String: String],
+        bundle: [String: String]
     ) throws -> MailStoreConfiguration {
         let urlText = environment["SLOWMAIL_SUPABASE_URL"] ?? bundle["SlowmailSupabaseURL"]
         let key = environment["SLOWMAIL_SUPABASE_ANON_KEY"] ?? bundle["SlowmailSupabaseAnonKey"]
@@ -42,6 +49,24 @@ public enum MailStoreConfiguration: Sendable, Equatable {
             throw MailStoreConfigurationError.incomplete(missing: "SLOWMAIL_SUPABASE_URL")
         case (_?, nil):
             throw MailStoreConfigurationError.incomplete(missing: "SLOWMAIL_SUPABASE_ANON_KEY")
+        }
+    }
+}
+
+public extension MailStoreConfiguration {
+    /// Wording for the screen a misconfigured build shows. Says which key is
+    /// wrong, because the person reading it is the person who can fix it.
+    static func explain(_ error: any Error) -> String {
+        switch error as? MailStoreConfigurationError {
+        case let .incomplete(missing):
+            return "\(missing) is not set. Set both it and the other, or neither for the demo."
+        case let .badURL(url):
+            return "\(url) is not an https address. Letters and the sign-in token travel on it."
+        case .notSignedIn:
+            return "A post office is configured, but nobody is signed in. "
+                + "Sign-in has not been built yet."
+        case nil:
+            return "\(error)"
         }
     }
 }
@@ -79,5 +104,26 @@ private extension String {
     var nonEmpty: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+
+public extension Bundle {
+    /// The two Info.plist keys a shipped build is configured through.
+    ///
+    /// Defaulted into `resolve` rather than read inside it so a test can supply
+    /// its own — but defaulted to the *real* bundle, because a default of `[:]`
+    /// meant the documented configuration was never read by anything that ships
+    /// and every build silently ran on fixtures.
+    var slowmailConfiguration: [String: String] {
+        Self.slowmailConfiguration { object(forInfoDictionaryKey: $0) }
+    }
+
+    /// Split from the property so the extraction can be tested against a source
+    /// that is not `Bundle.main`, which a test process cannot populate.
+    static func slowmailConfiguration(_ lookup: (String) -> Any?) -> [String: String] {
+        ["SlowmailSupabaseURL", "SlowmailSupabaseAnonKey"].reduce(into: [:]) { found, key in
+            if let value = lookup(key) as? String { found[key] = value }
+        }
     }
 }

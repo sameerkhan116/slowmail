@@ -127,10 +127,48 @@ public actor SupabaseMailStore: MailStore {
     /// It is an estimate. See `MailStore.carrierExpected`.
     public func carrierExpected(on day: Date) async throws -> Date? {
         let me = await tokens.userID
-        guard let arrival = PostalCalendar.carrierArrival(forRecipient: me, on: day) else {
+        // The server works the round out in the zone on the recipient's
+        // profile. This device's zone is a different thing and moves when its
+        // owner travels; using it would put the estimate hours or a whole day
+        // out, which is far outside the skew the reload window allows for, and
+        // the app would stop watching for a delivery that had not happened yet.
+        guard let arrival = PostalCalendar.carrierArrival(
+            forRecipient: me, on: day, calendar: try await homeCalendar()) else {
             return nil
         }
         return arrival > clock.now ? arrival : nil
+    }
+
+    /// The signed-in reader's own profile zone, fetched once.
+    ///
+    /// Reading your own profile is the same request whether or not anything is
+    /// coming, so it cannot become an oracle for "is there mail" the way asking
+    /// the server for a delivery time would.
+    private var cachedHomeZone: TimeZone?
+
+    private func homeCalendar() async throws -> Calendar {
+        if let cachedHomeZone { return Self.calendar(in: cachedHomeZone) }
+        let me = await tokens.userID
+        // Its own row type rather than ProfileRow: this query projects two
+        // columns, and decoding it into the full shape would fail on the
+        // missing ones and quietly fall through to the device zone.
+        let rows: [ZoneRow] = try await decode(
+            await get("profiles", ["select": "id,timezone", "id": "eq.\(me)"]))
+        guard let zone = rows.first.flatMap({ TimeZone(identifier: $0.tz) }) else {
+            // Better a device-zone estimate than none: the reload window is
+            // what actually catches a delivery, and this only decides when to
+            // start watching.
+            return .postal
+        }
+        cachedHomeZone = zone
+        return Self.calendar(in: zone)
+    }
+
+    private static func calendar(in zone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        calendar.timeZone = zone
+        return calendar
     }
 
     // MARK: Writing
@@ -140,11 +178,15 @@ public actor SupabaseMailStore: MailStore {
         let body = draft.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw MailStoreError.emptyBody }
         let me = await tokens.userID
-        let rows: [LetterRow] = try await call(
+        // `write_letter` is declared `returns public.letters` — one composite
+        // row, not `setof` — so PostgREST sends an object and decoding it as an
+        // array fails. The failure is expensive rather than cosmetic: the letter
+        // is already inserted and posted by the time the reply is written, so a
+        // sender told "that didn't send" who tries again has posted twice, and
+        // neither can be recalled once collected.
+        let row: LetterRow = try await decode(await rpc(
             "write_letter",
-            ["p_recipient_id": draft.correspondentID, "p_body": body]
-        )
-        guard let row = rows.first else { throw MailStoreError.notFound }
+            ["p_recipient_id": draft.correspondentID, "p_body": body]))
         return try row.letter(viewedBy: me)
     }
 
@@ -237,6 +279,12 @@ public actor SupabaseMailStore: MailStore {
 private struct PostgresFailure: Decodable {
     let code: String?
     let message: String
+}
+
+struct ZoneRow: Decodable {
+    let tz: String
+
+    enum CodingKeys: String, CodingKey { case tz = "timezone" }
 }
 
 struct LinkRow: Decodable {

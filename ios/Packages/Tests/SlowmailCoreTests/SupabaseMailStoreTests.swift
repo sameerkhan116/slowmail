@@ -118,6 +118,17 @@ struct SupabaseTransportTests {
     }
 }
 
+/// A letter that has been opened. Every other fixture leaves `read_at` null,
+/// which meant its key could be misspelled and nothing would notice — absent
+/// and wrongly-named both decode to nil.
+private let readRow = """
+[{"id":"l-2","sender_id":"them-uuid","recipient_id":"me-uuid","body":"Read me",
+  "state":"delivered","written_at":"2026-08-10T15:00:00+00:00",
+  "collected_at":"2026-08-10T21:00:00+00:00","postmark_date":"2026-08-10",
+  "deliver_at":"2026-08-14T16:23:00+00:00","delivered_at":"2026-08-14T16:23:00+00:00",
+  "read_at":"2026-08-14T18:05:00+00:00"}]
+"""
+
 @Suite("Rows decode the way Postgres renders them")
 struct SupabaseDecodingTests {
 
@@ -140,6 +151,28 @@ struct SupabaseDecodingTests {
             == "2026-07-23T21:06:00.000Z")
         #expect(letter.postmarkDate != nil, "a bare date must decode too")
         #expect(letter.readAt == nil)
+
+        // The populated optional timestamps, by value. Asserting only that the
+        // nulls are nil let a misspelled key for any of these survive: absent
+        // and wrongly-named both decode to nil, and nil equals nil.
+        #expect(iso.string(from: try #require(letter.collectedAt))
+            == "2026-08-15T21:00:00.000Z")
+        #expect(iso.string(from: try #require(letter.deliveredAt))
+            == "2026-08-20T16:23:00.000Z")
+        #expect(iso.string(from: try #require(letter.writtenAt))
+            == "2026-08-15T15:00:00.000Z")
+    }
+
+    @Test("An opened letter carries the moment it was opened")
+    func readAtDecodes() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "mailbox", body: readRow)
+        let letter = try #require(try await makeStore(transport).mailbox().first)
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        #expect(iso.string(from: try #require(letter.readAt)) == "2026-08-14T18:05:00.000Z")
+        #expect(letter.readAt != letter.deliveredAt, "opened later than it landed")
     }
 
     @Test("A letter I wrote reads as outbound")
@@ -227,25 +260,53 @@ struct SupabaseErrorTests {
 struct SupabaseCarrierTests {
 
     /// Asking the server when the carrier is due would make the answer depend
-    /// on whether anything is coming, and a recipient could read that off an
-    /// empty mailbox to learn a letter exists before it was delivered.
-    @Test("carrierExpected makes no request")
-    func roundIsLocal() async throws {
-        let transport = RecordingTransport()
-        let store = makeStore(transport)
-        _ = try await store.carrierExpected(on: Fixtures.referenceDate)
-        #expect(await transport.requests.isEmpty)
+    /// on whether anything is coming, and a recipient could read that
+    /// difference off an empty mailbox to learn a letter exists before it was
+    /// delivered. The round is a function of who you are and what day it is.
+    ///
+    /// It does make one request — for the reader's own profile zone — so the
+    /// property is not "makes no request" but "makes the same request either
+    /// way". That is what an oracle would have to break.
+    @Test("It asks the same thing whether or not mail is coming")
+    func makesNoRequestThatDependsOnMail() async throws {
+        func requests(mailbox: String) async throws -> [String] {
+            let transport = RecordingTransport()
+            await transport.reply(to: "mailbox", body: mailbox)
+            await transport.reply(
+                to: "profiles", body: #"[{"id":"me-uuid","timezone":"America/New_York"}]"#)
+            let store = makeStore(
+                transport, now: Fixtures.referenceDate.addingTimeInterval(-86_400 * 3))
+            _ = try await store.carrierExpected(on: Fixtures.referenceDate)
+            return await transport.requests.compactMap { $0.url?.absoluteString }
+        }
+
+        let withMail = try await requests(mailbox: deliveredRow)
+        let withNone = try await requests(mailbox: "[]")
+        #expect(withMail == withNone)
+        // Not two empty lists agreeing: it really does make a request.
+        #expect(withMail.count == 1)
+        let only = try #require(withMail.first)
+        #expect(only.contains("/rest/v1/profiles"))
+        #expect(!only.contains("letters") && !only.contains("mailbox"))
     }
 
-    @Test("It agrees with the round the rest of the app uses")
-    func matchesTheEngine() async throws {
-        let beforeRound = try #require(
-            PostalCalendar.carrierArrival(forRecipient: "me-uuid", on: Fixtures.referenceDate)
-        ).addingTimeInterval(-60)
-        let store = makeStore(RecordingTransport(), now: beforeRound)
-        let expected = try await store.carrierExpected(on: beforeRound)
-        #expect(expected == PostalCalendar.carrierArrival(
-            forRecipient: "me-uuid", on: beforeRound))
+    @Test("A round that has already passed is not still expected")
+    func pastRoundIsNotExpected() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(
+            to: "profiles", body: #"[{"id":"me-uuid","timezone":"America/New_York"}]"#)
+
+        var newYork = Calendar(identifier: .gregorian)
+        newYork.locale = Locale(identifier: "en_US_POSIX")
+        newYork.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let round = try #require(PostalCalendar.carrierArrival(
+            forRecipient: "me-uuid", on: Fixtures.referenceDate, calendar: newYork))
+
+        let before = makeStore(transport, now: round.addingTimeInterval(-60))
+        #expect(try await before.carrierExpected(on: Fixtures.referenceDate) == round)
+
+        let after = makeStore(transport, now: round.addingTimeInterval(60))
+        #expect(try await after.carrierExpected(on: Fixtures.referenceDate) == nil)
     }
 }
 
@@ -370,7 +431,7 @@ struct MailStoreConfigurationTests {
 
     @Test("Nothing configured is the demo")
     func nothingIsDemo() throws {
-        #expect(try MailStoreConfiguration.resolve(environment: [:]) == .demo)
+        #expect(try MailStoreConfiguration.resolve(environment: [:], bundle: [:]) == .demo)
     }
 
     @Test("A URL and a key reach the server")
@@ -378,7 +439,7 @@ struct MailStoreConfigurationTests {
         let resolved = try MailStoreConfiguration.resolve(environment: [
             "SLOWMAIL_SUPABASE_URL": "https://abc.supabase.co",
             "SLOWMAIL_SUPABASE_ANON_KEY": "anon",
-        ])
+        ], bundle: [:])
         #expect(resolved == .supabase(url: URL(string: "https://abc.supabase.co")!, apiKey: "anon"))
     }
 
@@ -389,18 +450,19 @@ struct MailStoreConfigurationTests {
     func halfIsAnError() {
         #expect(throws: MailStoreConfigurationError.incomplete(missing: "SLOWMAIL_SUPABASE_ANON_KEY")) {
             try MailStoreConfiguration.resolve(
-                environment: ["SLOWMAIL_SUPABASE_URL": "https://abc.supabase.co"])
+                environment: ["SLOWMAIL_SUPABASE_URL": "https://abc.supabase.co"], bundle: [:])
         }
         #expect(throws: MailStoreConfigurationError.incomplete(missing: "SLOWMAIL_SUPABASE_URL")) {
             try MailStoreConfiguration.resolve(
-                environment: ["SLOWMAIL_SUPABASE_ANON_KEY": "anon"])
+                environment: ["SLOWMAIL_SUPABASE_ANON_KEY": "anon"], bundle: [:])
         }
     }
 
     @Test("Whitespace is not a configuration either")
     func whitespaceIsDemo() throws {
         let resolved = try MailStoreConfiguration.resolve(
-            environment: ["SLOWMAIL_SUPABASE_URL": "  ", "SLOWMAIL_SUPABASE_ANON_KEY": " "])
+            environment: ["SLOWMAIL_SUPABASE_URL": "  ", "SLOWMAIL_SUPABASE_ANON_KEY": " "],
+            bundle: [:])
         #expect(resolved == .demo)
     }
 
@@ -410,7 +472,7 @@ struct MailStoreConfigurationTests {
             try MailStoreConfiguration.resolve(environment: [
                 "SLOWMAIL_SUPABASE_URL": "http://abc.supabase.co",
                 "SLOWMAIL_SUPABASE_ANON_KEY": "anon",
-            ])
+            ], bundle: [:])
         }
     }
 
@@ -514,5 +576,232 @@ struct PostalDateFormatTests {
         #expect(PostalDateFormats.parse("") == nil)
         #expect(PostalDateFormats.parse("not a date") == nil)
         #expect(PostalDateFormats.parse("2026-13-45") == nil)
+    }
+}
+
+/// `write_letter` is declared `returns public.letters`, so PostgREST sends one
+/// object. Every earlier test used an array and could not have seen this.
+private let writtenRow = """
+{"id":"l-9","sender_id":"me-uuid","recipient_id":"them-uuid","body":"Hello",
+ "state":"awaiting_collection","written_at":"2026-08-20T19:40:00+00:00",
+ "collected_at":null,"postmark_date":"2026-08-20","deliver_at":null,
+ "delivered_at":null,"read_at":null}
+"""
+
+@Suite("Posting a letter reports what actually happened")
+struct SupabaseWriteTests {
+
+    @Test("A successful send is read as a success, not a malformed reply")
+    func scalarReplyDecodes() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "write_letter", body: writtenRow)
+        let letter = try await makeStore(transport)
+            .write(Draft(correspondentID: "them-uuid", body: "Hello"))
+
+        // Decoding this as an array threw .malformedResponse while the letter
+        // was already inserted and posted — so the sender was told it failed
+        // and a second tap posted a second real letter that cannot be recalled
+        // once collected.
+        #expect(letter.id == "l-9")
+        #expect(letter.isOutbound)
+        #expect(letter.state == .awaitingCollection)
+        #expect(letter.correspondentID == "them-uuid")
+        #expect(letter.postmarkDate != nil)
+        #expect(letter.expectedDeliveryDate == nil, "nothing is scheduled until collection")
+    }
+
+    @Test("The recipient and body are sent under the names the function expects")
+    func argumentNamesAreRight() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "write_letter", body: writtenRow)
+        _ = try await makeStore(transport)
+            .write(Draft(correspondentID: "them-uuid", body: "  Hello  "))
+
+        let sent = try #require(await transport.requests.first?.httpBody)
+        let arguments = try #require(
+            try JSONSerialization.jsonObject(with: sent) as? [String: String])
+        // A wrong name is not a type error anywhere in Swift; PostgREST answers
+        // 404 "function not found", which reads like an outage.
+        #expect(arguments == ["p_recipient_id": "them-uuid", "p_body": "Hello"])
+    }
+
+    @Test("Each single-argument RPC names its argument correctly")
+    func singleArgumentNames() async throws {
+        func argument(_ call: (SupabaseMailStore) async throws -> Void) async throws -> [String: String] {
+            let transport = RecordingTransport()
+            try? await call(makeStore(transport))
+            let body = try #require(await transport.requests.first?.httpBody)
+            return try #require(try JSONSerialization.jsonObject(with: body) as? [String: String])
+        }
+        #expect(try await argument { try await $0.revoke("l-1") } == ["p_letter_id": "l-1"])
+        #expect(try await argument { try await $0.markRead("l-1") } == ["p_letter_id": "l-1"])
+        #expect(try await argument { _ = try await $0.correspondence(with: "c-1") }
+            == ["p_correspondent_id": "c-1"])
+    }
+
+    @Test("Null timestamps stay absent rather than becoming an instant")
+    func nullsDecodeAsNil() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "write_letter", body: writtenRow)
+        let letter = try await makeStore(transport)
+            .write(Draft(correspondentID: "them-uuid", body: "Hello"))
+        #expect(letter.collectedAt == nil)
+        #expect(letter.deliveredAt == nil)
+        #expect(letter.readAt == nil)
+        // And a present one is present, so this is not two absences agreeing.
+        #expect(letter.writtenAt != Date(timeIntervalSince1970: 0))
+    }
+}
+
+@Suite("Table reads are held to the same rules as function calls")
+struct SupabaseTableReadTests {
+
+    @Test("Neither table read asks for a count either")
+    func tableReadsAskNoCount() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "correspondents", body: acceptedLink)
+        await transport.reply(to: "profiles", body: bothProfiles)
+        _ = try await makeStore(transport).correspondents()
+
+        #expect(await transport.requests.count == 2, "both reads must be exercised")
+        for request in await transport.requests {
+            let prefer = request.allHTTPHeaderFields?["Prefer"] ?? ""
+            #expect(!prefer.contains("count"), "asked for a count: \(prefer)")
+            #expect(request.allHTTPHeaderFields?["Authorization"] == "Bearer jwt-abc")
+        }
+    }
+
+    @Test("The profiles query names both parties, not just the other one")
+    func profileQueryNamesBoth() async throws {
+        let transport = RecordingTransport()
+        await transport.reply(to: "correspondents", body: acceptedLink)
+        await transport.reply(to: "profiles", body: bothProfiles)
+        _ = try await makeStore(transport).correspondents()
+
+        let url = try #require(await transport.requests.last?.url?.absoluteString)
+        // Dropping my own id from the filter leaves the real server unable to
+        // return my coordinates, and every distance would be computed against
+        // nothing. The stub returns both regardless, so this reads the request.
+        #expect(url.contains("me-uuid"))
+        #expect(url.contains("them-uuid"))
+    }
+}
+
+@Suite("The round is drawn in the recipient's zone, not this device's")
+struct SupabaseCarrierZoneTests {
+
+    private func transport(zone: String) async -> RecordingTransport {
+        let transport = RecordingTransport()
+        await transport.reply(
+            to: "profiles", body: #"[{"id":"me-uuid","timezone":"\#(zone)"}]"#)
+        return transport
+    }
+
+    @Test("It uses the profile's zone")
+    func usesProfileZone() async throws {
+        let transport = await transport(zone: "Asia/Tokyo")
+        let expected = try await makeStore(transport, now: Fixtures.referenceDate.addingTimeInterval(-86_400 * 3))
+            .carrierExpected(on: Fixtures.referenceDate)
+
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.locale = Locale(identifier: "en_US_POSIX")
+        tokyo.timeZone = try #require(TimeZone(identifier: "Asia/Tokyo"))
+        #expect(expected == PostalCalendar.carrierArrival(
+            forRecipient: "me-uuid", on: Fixtures.referenceDate, calendar: tokyo))
+    }
+
+    /// The bug: the device's zone travels with its owner and the server's does
+    /// not, so a reader who flew somewhere got an estimate a whole round out.
+    @Test("Two zones give two different instants, so the choice is load-bearing")
+    func theZoneChoiceMatters() async throws {
+        func round(_ zone: String) async throws -> Date? {
+            try await makeStore(
+                await transport(zone: zone),
+                now: Fixtures.referenceDate.addingTimeInterval(-86_400 * 3)
+            ).carrierExpected(on: Fixtures.referenceDate)
+        }
+        let tokyo = try #require(try await round("Asia/Tokyo"))
+        let newYork = try #require(try await round("America/New_York"))
+        #expect(tokyo != newYork)
+    }
+
+    @Test("The profile is asked for once, however often the round is wanted")
+    func zoneIsFetchedOnce() async throws {
+        let transport = await transport(zone: "Asia/Tokyo")
+        let store = makeStore(transport, now: Fixtures.referenceDate.addingTimeInterval(-86_400 * 3))
+        for _ in 0..<4 { _ = try await store.carrierExpected(on: Fixtures.referenceDate) }
+        #expect(await transport.requests.count == 1)
+    }
+}
+
+@Suite("A misconfigured build says so instead of inventing letters")
+struct AppStartTests {
+
+    @Test("A configured server with no session refuses rather than showing fixtures")
+    func configuredWithoutSession() {
+        let reason = MailStoreConfiguration.explain(MailStoreConfigurationError.notSignedIn)
+        #expect(reason.contains("nobody is signed in"))
+        #expect(!reason.isEmpty)
+    }
+
+    @Test("The reason names the key that is wrong")
+    func reasonNamesTheKey() {
+        let reason = MailStoreConfiguration.explain(
+            MailStoreConfigurationError.incomplete(missing: "SLOWMAIL_SUPABASE_URL"))
+        #expect(reason.contains("SLOWMAIL_SUPABASE_URL"))
+    }
+
+    @Test("Info.plist is actually read, not defaulted away")
+    func bundleIsRead() throws {
+        let resolved = try MailStoreConfiguration.resolve(
+            environment: [:],
+            bundle: [
+                "SlowmailSupabaseURL": "https://plist.supabase.co",
+                "SlowmailSupabaseAnonKey": "plist-key",
+            ])
+        // The bug: `bundle` defaulted to [:], so the documented shipping
+        // configuration was never consulted and every build ran on fixtures.
+        #expect(resolved == .supabase(
+            url: URL(string: "https://plist.supabase.co")!, apiKey: "plist-key"))
+    }
+
+    @Test("The environment wins over the bundle, so a debug run can redirect")
+    func environmentWins() throws {
+        let resolved = try MailStoreConfiguration.resolve(
+            environment: [
+                "SLOWMAIL_SUPABASE_URL": "https://env.supabase.co",
+                "SLOWMAIL_SUPABASE_ANON_KEY": "env-key",
+            ],
+            bundle: [
+                "SlowmailSupabaseURL": "https://plist.supabase.co",
+                "SlowmailSupabaseAnonKey": "plist-key",
+            ])
+        #expect(resolved == .supabase(
+            url: URL(string: "https://env.supabase.co")!, apiKey: "env-key"))
+    }
+}
+
+@Suite("Info.plist keys are read from the bundle")
+struct BundleConfigurationTests {
+
+    @Test("Both documented keys are picked up")
+    func readsBothKeys() {
+        let source = [
+            "SlowmailSupabaseURL": "https://plist.supabase.co",
+            "SlowmailSupabaseAnonKey": "plist-key",
+        ]
+        #expect(Bundle.slowmailConfiguration { source[$0] } == source)
+    }
+
+    @Test("A key that is not a string is not a configuration")
+    func nonStringIsIgnored() {
+        #expect(Bundle.slowmailConfiguration { _ in 42 }.isEmpty)
+        #expect(Bundle.slowmailConfiguration { _ in nil }.isEmpty)
+    }
+
+    @Test("Nothing else in Info.plist is picked up by accident")
+    func onlyTheTwoKeys() {
+        let found = Bundle.slowmailConfiguration { _ in "value" }
+        #expect(Set(found.keys) == ["SlowmailSupabaseURL", "SlowmailSupabaseAnonKey"])
     }
 }
