@@ -12,6 +12,7 @@ public struct WriteView: View {
     private let recipient: Correspondent?
     private let nextCollection: Date
     private let estimatedArrival: Date
+    private let now: Date
     private let isPosting: Bool
     private let onPost: () -> Void
     private let onPickRecipient: () -> Void
@@ -21,6 +22,7 @@ public struct WriteView: View {
         recipient: Correspondent?,
         nextCollection: Date,
         estimatedArrival: Date,
+        now: Date,
         isPosting: Bool = false,
         onPost: @escaping () -> Void = {},
         onPickRecipient: @escaping () -> Void = {}
@@ -29,6 +31,7 @@ public struct WriteView: View {
         self.recipient = recipient
         self.nextCollection = nextCollection
         self.estimatedArrival = estimatedArrival
+        self.now = now
         self.isPosting = isPosting
         self.onPost = onPost
         self.onPickRecipient = onPickRecipient
@@ -104,11 +107,7 @@ public struct WriteView: View {
     }
 
     private var collectionLine: String {
-        let formatter = DateFormatter()
-        formatter.calendar = .postal
-        formatter.timeZone = Calendar.postal.timeZone
-        formatter.dateFormat = "EEEE 'at' h a"
-        return "Collected \(formatter.string(from: nextCollection).lowercased())"
+        PostalWording.collection(nextCollection, asOf: now)
     }
 
     private var postButton: some View {

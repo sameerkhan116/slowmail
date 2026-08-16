@@ -278,9 +278,21 @@ struct CarrierArrivalTests {
             PostalCalendar.carrierArrival(forRecipient: "me", on: thursdayAfternoon))
         let hour = Calendar.postal.component(.hour, from: arrival)
         #expect(hour >= 9 && hour < 17)
-        let again = try #require(
-            PostalCalendar.carrierArrival(forRecipient: "me", on: thursdayAfternoon))
-        #expect(arrival == again, "same address, same day, same answer")
+        // Asking twice with the same instant would compare a value to itself.
+        // The claim is that any moment of the same local day gives one answer.
+        let dawn = try #require(
+            Calendar.postal.date(bySettingHour: 0, minute: 1, second: 0, of: thursdayAfternoon))
+        let dusk = try #require(
+            Calendar.postal.date(bySettingHour: 23, minute: 59, second: 0, of: thursdayAfternoon))
+        for instant in [dawn, dusk] {
+            let again = try #require(
+                PostalCalendar.carrierArrival(forRecipient: "me", on: instant))
+            #expect(arrival == again, "same address, same day, same answer")
+        }
+        // And a different address on the same day must not share the round.
+        let other = try #require(
+            PostalCalendar.carrierArrival(forRecipient: "someone-else", on: thursdayAfternoon))
+        #expect(other != arrival)
     }
 
     @Test("Once the carrier has been, nothing more is expected")
@@ -297,19 +309,23 @@ struct CollectionAdvancesTests {
 
     @Test("A letter written today stops being revocable at five")
     func revocabilityExpiresAtCollection() async throws {
-        let post = store()
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello."))
-
-        // Same store, same letter, seen from after the box was emptied.
-        let evening = try #require(
-            Calendar.postal.date(bySettingHour: 17, minute: 30, second: 0, of: thursdayAfternoon))
+        // Five o'clock exactly is the collection, not the last moment before
+        // it. Testing from half past would pass whether the comparison is
+        // strict or not, which is the whole question.
         let clock = SimulatedClock(now: thursdayAfternoon)
-        let post2 = MockMailStore(clock: clock)
-        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello."))
-        #expect(l2.id != letter.id || true)
-        clock.advance(hours: 2)
-        #expect(clock.now >= evening.addingTimeInterval(-3_600))
+        let post = MockMailStore(clock: clock)
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let collection = try #require(letter.postmarkDate)
 
+        clock.set(collection.addingTimeInterval(-1))
+        #expect(letter.isRevocable(asOf: clock.now), "a second before, it is still yours")
+        try await post.revoke(letter.id)
+
+        let clock2 = SimulatedClock(now: thursdayAfternoon)
+        let post2 = MockMailStore(clock: clock2)
+        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        clock2.set(try #require(l2.postmarkDate))
+        #expect(!l2.isRevocable(asOf: clock2.now), "at five it has gone")
         await #expect(throws: MailStoreError.alreadyCollected) {
             try await post2.revoke(l2.id)
         }
@@ -345,6 +361,24 @@ struct InternationalTransitTests {
             Calendar.postal.dateComponents([.day], from: Calendar.postal.startOfDay(for: postmark),
                                            to: Calendar.postal.startOfDay(for: expected)).day)
         #expect(days == 14, "calendar days, not postal days")
+    }
+
+    @Test("A calendar-day arrival landing on a Sunday waits for Monday")
+    func calendarArrivalRollsOffSunday() throws {
+        // Thursday 20 August plus fourteen never lands on a Sunday, so the
+        // fourteen-day case above cannot exercise the roll-forward at all.
+        // Ten days from the same Thursday is Sunday 30 August.
+        let collection = try #require(
+            Calendar.postal.date(bySettingHour: 17, minute: 0, second: 0, of: thursdayAfternoon))
+        let naive = try #require(
+            Calendar.postal.date(byAdding: .day, value: 10, to: collection))
+        #expect(Calendar.postal.component(.weekday, from: naive) == 1, "the setup must hit a Sunday")
+
+        let arrival = PostalCalendar.arrival(after: collection, transit: .international(10))
+        #expect(Calendar.postal.component(.weekday, from: arrival) == 2, "carried to Monday")
+        #expect(Calendar.postal.isDate(
+            arrival, inSameDayAs: try #require(
+                Calendar.postal.date(byAdding: .day, value: 1, to: naive))))
     }
 
     @Test("Domestic mail still counts postal days")
@@ -468,5 +502,108 @@ struct CollectionWordingTests {
             postmarkDate: collection, expectedDeliveryDate: moment(2026, 8, 25, 14, 0))
         #expect(letter.isRevocable(asOf: now))
         #expect(!PostalWording.collection(collection, asOf: now).lowercased().contains("collected"))
+    }
+}
+
+/// The client shows the carrier's round without asking the server, which only
+/// works while both compute the same seed from the same inputs. These vectors
+/// come from running `carrierArrival` in `packages/mailclock` — the engine that
+/// actually decides delivery — so a divergence in namespace, quantisation or
+/// local-time construction fails here instead of silently telling one person
+/// the post has been when it has not.
+///
+/// They are compared as local wall-clock times rather than absolute instants,
+/// and that is deliberate. The seed determines a local hour and minute; which
+/// UTC instant that denotes is a fact about the zone's history, and the two
+/// runtimes do not always agree on it. Egypt is the live example: Swift carries
+/// tzdata 2026c and puts Cairo at UTC+3 on 2025-04-25, while Node's bundled ICU
+/// still has UTC+2. Both agree the carrier comes at 11:05 local; they disagree
+/// by an hour about what that means in UTC. Asserting the instant here would
+/// fail on a difference this code cannot cause and cannot fix.
+@Suite("The client's round agrees with the scheduling engine")
+struct CarrierArrivalGoldenVectors {
+    private struct Vector {
+        let userID: String
+        let localDate: String
+        let zone: String
+        let localTime: String
+    }
+
+    private let vectors = [
+        Vector(userID: "me", localDate: "2026-08-20", zone: "America/New_York", localTime: "12:23"),
+        Vector(userID: "me", localDate: "2026-08-21", zone: "America/New_York", localTime: "09:24"),
+        Vector(userID: "someone-else", localDate: "2026-08-20", zone: "America/New_York",
+               localTime: "15:35"),
+        // Cairo's clocks jump at midnight on this date, so the day begins at
+        // 01:00 and adding elapsed seconds to its start overshoots the window.
+        Vector(userID: "user-0", localDate: "2025-04-25", zone: "Africa/Cairo", localTime: "11:05"),
+        // Non-ASCII: agrees only if both sides hash UTF-16 code units.
+        Vector(userID: "ünïcodé", localDate: "2026-12-24", zone: "Asia/Tokyo", localTime: "14:12"),
+    ]
+
+    @Test("Every vector reproduces the engine's local time exactly")
+    func matchesEngine() throws {
+        for vector in vectors {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try #require(TimeZone(identifier: vector.zone))
+            var parts = DateComponents()
+            let numbers = vector.localDate.split(separator: "-").map { Int($0)! }
+            parts.year = numbers[0]
+            parts.month = numbers[1]
+            parts.day = numbers[2]
+            parts.hour = 12
+            let noon = try #require(calendar.date(from: parts))
+
+            let arrival = try #require(
+                PostalCalendar.carrierArrival(
+                    forRecipient: vector.userID, on: noon, calendar: calendar))
+            let fields = calendar.dateComponents([.hour, .minute], from: arrival)
+            let actual = String(format: "%02d:%02d", fields.hour ?? -1, fields.minute ?? -1)
+            #expect(
+                actual == vector.localTime,
+                "\(vector.userID) on \(vector.localDate) in \(vector.zone)")
+
+            let hour = try #require(fields.hour)
+            #expect(hour >= 9 && hour < 17, "the round stays inside the working day")
+
+            // The arrival must fall on the day it was drawn for, which adding
+            // elapsed seconds to a short or long day does not guarantee.
+            #expect(calendar.isDate(arrival, inSameDayAs: noon))
+        }
+    }
+}
+
+/// The invariant, pinned rather than left to review: nothing the app says about
+/// a *particular* letter carries a clock time. Collection is exempt by design —
+/// it is a deadline the sender acts on, not a prediction about arrival.
+@Suite("No letter is ever given a time of day")
+struct DeliveryPrecisionInvariant {
+
+    @Test("Arrival wording across a year of dates names days, never hours")
+    func arrivalWordingHasNoClockTimes() throws {
+        let clockish = try NSRegularExpression(pattern: #"\d{1,2}[:.]\d{2}|\b\d{1,2}\s?(am|pm)\b"#,
+                                               options: .caseInsensitive)
+        var day = Fixtures.referenceDate
+        for _ in 0..<365 {
+            let lines = [
+                PostalWording.expectedArrival(day),
+                PostalWording.arrivedOn(day, now: day),
+                PostalWording.postmark(day),
+            ]
+            for line in lines {
+                let range = NSRange(line.startIndex..., in: line)
+                #expect(
+                    clockish.firstMatch(in: line, range: range) == nil,
+                    "arrival copy must not name a time: \(line)")
+            }
+            day = try #require(Calendar.postal.date(byAdding: .day, value: 1, to: day))
+        }
+    }
+
+    @Test("Collection is the one place a time appears, and it is a deadline")
+    func collectionStatesItsDeadline() {
+        let five = Fixtures.referenceDate.addingTimeInterval(3_600)
+        let line = PostalWording.collection(five, asOf: Fixtures.referenceDate)
+        #expect(line.contains("5 pm") || line.contains("4 pm"))
     }
 }

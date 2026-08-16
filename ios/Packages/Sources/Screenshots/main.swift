@@ -113,7 +113,8 @@ MainActor.assumeIsolated {
             recipient: people["c-ben"],
             nextCollection: PostalCalendar.nextCollection(after: now),
             estimatedArrival: PostalCalendar.arrival(
-                after: PostalCalendar.nextCollection(after: now), transit: .domestic(4))
+                after: PostalCalendar.nextCollection(after: now), transit: .domestic(4)),
+            now: now
         )
     }
 
@@ -123,7 +124,8 @@ MainActor.assumeIsolated {
             recipient: people["c-kenji"],
             nextCollection: PostalCalendar.nextCollection(after: now),
             estimatedArrival: PostalCalendar.arrival(
-                after: PostalCalendar.nextCollection(after: now), transit: .international(14))
+                after: PostalCalendar.nextCollection(after: now), transit: .international(14)),
+            now: now
         )
     }
 

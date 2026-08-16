@@ -82,9 +82,16 @@ public extension PostalCalendar {
         let start = calendar.startOfDay(for: day)
         let components = calendar.dateComponents([.year, .month, .day], from: start)
         let key = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-        let fraction = Hashing.unitInterval("arrival", recipientID, key)
-        let windowSeconds = (latestDeliveryHour - earliestDeliveryHour) * 3_600
-        let offset = earliestDeliveryHour * 3_600 + Int(fraction * Double(windowSeconds))
-        return calendar.date(byAdding: .second, value: offset, to: start)
+        // Namespace, quantisation and range all have to match the scheduling
+        // engine exactly, or the app and the server disagree about when the
+        // carrier came. Minutes, not seconds, over an inclusive 480-wide range.
+        let windowMinutes = (latestDeliveryHour - earliestDeliveryHour) * 60
+        let offset = Hashing.intInRange(0, windowMinutes - 1, "carrier-arrival", recipientID, key)
+        // Adding seconds to midnight is not a local time: on a day that starts
+        // at 01:00 because the clocks moved, it lands outside nine-to-five.
+        var wall = calendar.dateComponents([.year, .month, .day], from: start)
+        wall.hour = earliestDeliveryHour + offset / 60
+        wall.minute = offset % 60
+        return calendar.date(from: wall)
     }
 }

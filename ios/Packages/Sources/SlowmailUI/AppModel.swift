@@ -26,6 +26,16 @@ public final class AppModel {
 
     public var now: Date { clock.now }
 
+    /// The next instant at which what the app is showing becomes wrong: the
+    /// carrier's round if it has not happened yet, otherwise the five o'clock
+    /// collection. Views wait on it so a mailbox left open on screen still
+    /// fills when the post comes.
+    public var nextBoundary: Date? {
+        let collection = PostalCalendar.nextCollection(after: clock.now)
+        guard let carrier = carrierExpected, carrier > clock.now else { return collection }
+        return min(carrier, collection)
+    }
+
     public func load() async {
         do {
             mailbox = try await store.mailbox()

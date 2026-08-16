@@ -16,9 +16,24 @@ enum Hashing {
         return hash
     }
 
-    /// A fraction in [0, 1) derived from a namespaced key.
-    static func unitInterval(_ parts: String...) -> Double {
-        let key = parts.joined(separator: "\u{0}")
-        return Double(fnv1a(key) % 1_000_000) / 1_000_000.0
+    /// A hash namespaced by purpose, so that two draws keyed on the same
+    /// string — a message id that happens to equal a user id — do not move
+    /// together. The NUL separator and the namespace-then-parts order are
+    /// part of the wire contract with the server, not an implementation
+    /// detail: change either and every seeded time in the app shifts.
+    static func seeded(_ namespace: String, _ parts: [String]) -> UInt32 {
+        fnv1a(namespace + "\u{0}" + parts.joined(separator: "\u{0}"))
+    }
+
+    /// A fraction in [0, 1), over the full 32-bit range.
+    static func unitInterval(_ namespace: String, _ parts: String...) -> Double {
+        Double(seeded(namespace, parts)) / 4_294_967_296.0
+    }
+
+    /// Uniform integer in [min, max], inclusive at both ends.
+    static func intInRange(_ min: Int, _ max: Int, _ namespace: String, _ parts: String...) -> Int {
+        precondition(max >= min, "empty range")
+        let span = UInt32(max - min + 1)
+        return min + Int(seeded(namespace, parts) % span)
     }
 }

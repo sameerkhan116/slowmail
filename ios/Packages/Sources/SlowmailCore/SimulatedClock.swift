@@ -27,10 +27,19 @@ public final class SimulatedClock: Clock, @unchecked Sendable {
         return current
     }
 
+    public func set(_ date: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        current = date
+    }
+
+    /// Days are calendar days, not multiples of 86,400 seconds. On the two
+    /// days a year a day is 23 or 25 hours long, the difference is the
+    /// difference between "same time tomorrow" and an hour either side of it.
     public func advance(days: Int) {
         lock.lock()
         defer { lock.unlock() }
-        current = current.addingTimeInterval(Double(days) * 86_400)
+        current = Calendar.postal.date(byAdding: .day, value: days, to: current) ?? current
     }
 
     public func advance(hours: Int) {

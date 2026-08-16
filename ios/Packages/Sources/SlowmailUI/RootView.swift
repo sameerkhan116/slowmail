@@ -33,6 +33,17 @@ public struct RootView: View {
             guard phase == .active else { return }
             Task { await model.load() }
         }
+        // Coming back to a foregrounded app is only half of it. Someone who
+        // leaves the mailbox open at nine in the morning must still see the
+        // post appear when the carrier reaches them, without touching anything.
+        .task(id: model.nextBoundary) {
+            guard let boundary = model.nextBoundary else { return }
+            let seconds = boundary.timeIntervalSince(model.now)
+            guard seconds > 0 else { return }
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            await model.load()
+        }
         .sheet(item: $openLetter) { letter in
             LetterReaderView(
                 letter: letter,
@@ -54,6 +65,7 @@ public struct RootView: View {
                     after: PostalCalendar.nextCollection(after: model.now),
                     transit: person.transit
                 ),
+                now: model.now,
                 isPosting: isPosting,
                 onPost: { post(to: person) }
             )
@@ -76,11 +88,15 @@ public struct RootView: View {
         isPosting = true
         Task {
             defer { isPosting = false }
-            if await model.post(Draft(correspondentID: person.id, body: body)) != nil {
-                drafts[person.id] = nil
-                composing = nil
+            guard await model.post(Draft(correspondentID: person.id, body: body)) != nil else {
+                return  // On failure the draft is left exactly where it was.
             }
-            // On failure the draft is left exactly where it was.
+            // The composer can be dismissed and reopened while the post is in
+            // flight, so what comes back may no longer be what was sent. Clear
+            // only the words that actually went, and only close the sheet if it
+            // is still the one that sent them.
+            if drafts[person.id] == body { drafts[person.id] = nil }
+            if composing?.id == person.id { composing = nil }
         }
     }
 

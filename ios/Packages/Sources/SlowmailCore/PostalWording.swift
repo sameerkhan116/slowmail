@@ -2,9 +2,15 @@ import Foundation
 
 /// How the app talks about time.
 ///
-/// The rule underneath all of this: never state a delivery time more precisely
-/// than the post can honour. Mail arrives on a day, not at 14:32, and saying
-/// otherwise turns anticipation into a countdown.
+/// The rule underneath all of this: never tell someone when a particular letter
+/// will arrive. Mail arrives on a day, not at 14:32, and a countdown is the one
+/// thing this app exists to remove.
+///
+/// The rule is about specific letters, not about clock times as such. Onboarding
+/// says the carrier comes between nine and five, which is the mechanic itself and
+/// is the same sentence for everyone; it tells you the app will not tell you more.
+/// Collection is stated exactly, because five o'clock is a deadline the sender
+/// can still act on rather than a prediction about someone else's mail.
 public enum PostalWording {
     public static func postmark(_ date: Date, calendar: Calendar = .postal) -> String {
         let formatter = DateFormatter()
@@ -36,8 +42,8 @@ public enum PostalWording {
         return "Arrived \(formatter.string(from: date))"
     }
 
-    /// Collection is the only precise time the app ever shows, because it is a
-    /// deadline the sender can still act on rather than a prediction. Tense
+    /// Stated to the minute because it is a deadline the sender can still act
+    /// on, which is the one kind of precision this app owes anyone. Tense
     /// follows the clock: a letter still sitting in the postbox offers to be
     /// fetched back, so describing it as already collected contradicts itself.
     public static func collection(_ date: Date, asOf now: Date, calendar: Calendar = .postal)
