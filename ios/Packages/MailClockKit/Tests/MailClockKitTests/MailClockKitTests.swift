@@ -126,36 +126,81 @@ private enum FixtureError: Error {
     case missingUserId
 }
 
-private func loadFixtures() throws -> Fixtures {
+private func fixtureData() throws -> Data {
     var fixtureURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     for _ in 0..<5 {
         fixtureURL.deleteLastPathComponent()
     }
     fixtureURL.append(path: "fixtures/mailclock-cases.json")
-    return try JSONDecoder().decode(
-        Fixtures.self,
-        from: Data(contentsOf: fixtureURL)
+    return try Data(contentsOf: fixtureURL)
+}
+
+private let fixtures = try! JSONDecoder().decode(
+    Fixtures.self,
+    from: fixtureData()
+)
+
+@Test("Fixture document has every contract section and case")
+private func fixtureCoverage() throws {
+    let document = try #require(
+        JSONSerialization.jsonObject(with: fixtureData()) as? [String: Any]
+    )
+    #expect(
+        Set(document.keys) == [
+            "$comment",
+            "parties",
+            "hashVectors",
+            "observedHolidays2026",
+            "postalDays",
+            "transitBands",
+            "internationalBands",
+            "jitterBranches",
+            "collection",
+            "schedule",
+        ]
+    )
+    #expect(fixtures.hashVectors.count == 5)
+    #expect(fixtures.observedHolidays2026.count == 12)
+    #expect(fixtures.parties.count == 7)
+    #expect(fixtures.postalDays.count == 11)
+    #expect(fixtures.transitBands.count == 10)
+    #expect(fixtures.internationalBands.count == 10)
+    #expect(fixtures.jitterBranches.count == 6)
+    #expect(fixtures.collection.count == 13)
+    #expect(fixtures.schedule.count == 18)
+    #expect(
+        fixtures.hashVectors.count
+            + 1
+            + fixtures.postalDays.count
+            + fixtures.transitBands.count
+            + fixtures.internationalBands.count
+            + fixtures.jitterBranches.count
+            + fixtures.collection.count
+            + fixtures.schedule.count == 74
     )
 }
 
-private let fixtures = try! loadFixtures()
-
-@Test("FNV-1a published vector", arguments: fixtures.hashVectors)
-private func hashVector(_ testCase: HashVector) {
-    #expect(fnv1a(testCase.input) == testCase.fnv1a)
+@Test("FNV-1a published vectors")
+private func hashVectors() {
+    var executed = 0
+    for testCase in fixtures.hashVectors {
+        #expect(fnv1a(testCase.input) == testCase.fnv1a)
+        executed += 1
+    }
+    #expect(executed == fixtures.hashVectors.count)
 }
 
-@Test(
-    "FNV-1a hashes UTF-16 code units",
-    arguments: [
+@Test("FNV-1a hashes UTF-16 code units")
+private func unicodeHashVectors() {
+    let vectors: [(String, UInt32)] = [
         ("é", UInt32(1_812_687_940)),
         ("郵便", UInt32(735_461_629)),
         ("😀", UInt32(3_409_036_472)),
         ("a😀z", UInt32(2_009_751_353)),
     ]
-)
-private func unicodeHashVector(_ input: String, _ expected: UInt32) {
-    #expect(fnv1a(input) == expected)
+    for (input, expected) in vectors {
+        #expect(fnv1a(input) == expected)
+    }
 }
 
 @Test("Observed holidays for 2026")
@@ -166,69 +211,99 @@ private func observedHolidayFixtures() throws {
     )
 }
 
-@Test("Postal day", arguments: fixtures.postalDays)
-private func postalDayFixture(_ testCase: PostalDayCase) throws {
-    #expect(
-        try isPostalDay(testCase.date) == testCase.isPostalDay,
-        Comment(rawValue: testCase.why)
-    )
+@Test("Postal days")
+private func postalDayFixtures() throws {
+    var executed = 0
+    for testCase in fixtures.postalDays {
+        #expect(
+            try isPostalDay(testCase.date) == testCase.isPostalDay,
+            Comment(rawValue: testCase.why)
+        )
+        executed += 1
+    }
+    #expect(executed == fixtures.postalDays.count)
 }
 
-@Test("Domestic transit band", arguments: fixtures.transitBands)
-private func transitBandFixture(_ testCase: TransitBandCase) {
+@Test("Domestic transit bands")
+private func transitBandFixtures() {
     let domestic = Party(
         timeZone: "America/New_York",
         latitude: 0,
         longitude: 0,
         countryCode: "US"
     )
-    #expect(
-        baseDomesticTransitDays(
-            testCase.miles,
-            sender: domestic,
-            recipient: domestic
-        ) == testCase.days
-    )
-}
-
-@Test("International transit band", arguments: fixtures.internationalBands)
-private func internationalBandFixture(_ testCase: InternationalBandCase) {
-    #expect(
-        internationalBand(countryCode: testCase.countryCode)
-            == InternationalBand(min: testCase.min, max: testCase.max)
-    )
-}
-
-@Test("Transit jitter branch", arguments: fixtures.jitterBranches)
-private func jitterFixture(_ testCase: JitterCase) {
-    #expect(transitJitter(messageId: testCase.messageId) == testCase.jitter)
-}
-
-@Test("Collection schedule", arguments: fixtures.collection)
-private func collectionFixture(_ testCase: CollectionCase) throws {
-    let result = try nextCollection(
-        writtenAt: testCase.writtenAt,
-        senderTimeZone: testCase.tz
-    )
-    #expect(result.postmarkDate == testCase.postmarkDate)
-    #expect(result.at == testCase.collectedAt)
-}
-
-@Test("End-to-end schedule", arguments: fixtures.schedule)
-private func scheduleFixture(_ testCase: ScheduleCase) throws {
-    guard let sender = fixtures.parties[testCase.input.sender] else {
-        throw FixtureError.missingParty(testCase.input.sender)
-    }
-    guard let recipient = fixtures.parties[testCase.input.recipient] else {
-        throw FixtureError.missingParty(testCase.input.recipient)
-    }
-    let result = try schedule(
-        ScheduleInput(
-            messageId: testCase.input.messageId,
-            writtenAt: testCase.input.writtenAt,
-            sender: sender.party,
-            recipient: try recipient.recipient
+    var executed = 0
+    for testCase in fixtures.transitBands {
+        #expect(
+            baseDomesticTransitDays(
+                testCase.miles,
+                sender: domestic,
+                recipient: domestic
+            ) == testCase.days
         )
-    )
-    #expect(result == testCase.expected.schedule)
+        executed += 1
+    }
+    #expect(executed == fixtures.transitBands.count)
+}
+
+@Test("International transit bands")
+private func internationalBandFixtures() {
+    var executed = 0
+    for testCase in fixtures.internationalBands {
+        #expect(
+            internationalBand(countryCode: testCase.countryCode)
+                == InternationalBand(min: testCase.min, max: testCase.max)
+        )
+        executed += 1
+    }
+    #expect(executed == fixtures.internationalBands.count)
+}
+
+@Test("Transit jitter branches")
+private func jitterFixtures() {
+    var executed = 0
+    for testCase in fixtures.jitterBranches {
+        #expect(transitJitter(messageId: testCase.messageId) == testCase.jitter)
+        executed += 1
+    }
+    #expect(executed == fixtures.jitterBranches.count)
+}
+
+@Test("Collection schedules")
+private func collectionFixtures() throws {
+    var executed = 0
+    for testCase in fixtures.collection {
+        let result = try nextCollection(
+            writtenAt: testCase.writtenAt,
+            senderTimeZone: testCase.tz
+        )
+        #expect(result.postmarkDate == testCase.postmarkDate)
+        #expect(result.at == testCase.collectedAt)
+        executed += 1
+    }
+    #expect(executed == fixtures.collection.count)
+}
+
+@Test("End-to-end schedules")
+private func scheduleFixtures() throws {
+    var executed = 0
+    for testCase in fixtures.schedule {
+        guard let sender = fixtures.parties[testCase.input.sender] else {
+            throw FixtureError.missingParty(testCase.input.sender)
+        }
+        guard let recipient = fixtures.parties[testCase.input.recipient] else {
+            throw FixtureError.missingParty(testCase.input.recipient)
+        }
+        let result = try schedule(
+            ScheduleInput(
+                messageId: testCase.input.messageId,
+                writtenAt: testCase.input.writtenAt,
+                sender: sender.party,
+                recipient: try recipient.recipient
+            )
+        )
+        #expect(result == testCase.expected.schedule)
+        executed += 1
+    }
+    #expect(executed == fixtures.schedule.count)
 }
