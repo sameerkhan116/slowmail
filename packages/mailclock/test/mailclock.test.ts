@@ -182,6 +182,26 @@ describe("carrier arrival", () => {
     expect(a).toBe(b);
   });
 
+  it("is only one instant if the zone is one zone", () => {
+    // Passing the same zone twice asserts nothing the seed doesn't already
+    // guarantee. The property callers actually need is that they resolved the
+    // recipient's zone once — because if they didn't, this is what they get,
+    // and it is the recipient watching the post arrive twice in a day.
+    const date = "2026-11-01";
+    const east = carrierArrival("u-moved", date, "America/New_York");
+    const west = carrierArrival("u-moved", date, "America/Los_Angeles");
+    expect(east).not.toBe(west);
+    const gap = Math.abs(Date.parse(west) - Date.parse(east)) / 3_600_000;
+    expect(gap).toBe(3);
+
+    // Same wall clock, though — the seeded minute did not move.
+    for (const [iso, tz] of [[east, "America/New_York"], [west, "America/Los_Angeles"]] as const) {
+      expect(DateTime.fromISO(iso, { zone: tz }).toFormat("HH:mm")).toBe(
+        DateTime.fromISO(east, { zone: "America/New_York" }).toFormat("HH:mm"),
+      );
+    }
+  });
+
   it("differs between people on the same day", () => {
     const mine = carrierArrival("u-one", "2026-08-20", "America/Denver");
     const theirs = carrierArrival("u-two", "2026-08-20", "America/Denver");
