@@ -19,6 +19,13 @@ Deno.serve(async (req) => {
         if (error) throw new Error(`claim_collection_batch: ${error.message}`);
         return (data ?? []) as ClaimedLetter[];
       },
+      releaseClaim: async (letterId, reason) => {
+        const { error } = await db.rpc("release_collection_claim", {
+          p_letter_id: letterId,
+          p_reason: reason,
+        });
+        if (error) throw new Error(`release_collection_claim: ${error.message}`);
+      },
       applyResults: async (results) => {
         const { data, error } = await db.rpc("apply_collection", { p_results: results });
         if (error) throw new Error(`apply_collection: ${error.message}`);

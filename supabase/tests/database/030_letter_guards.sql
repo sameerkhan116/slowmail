@@ -15,9 +15,9 @@ insert into auth.users (id) values
   ('a0000000-0000-4000-8000-000000000001'),
   ('b0000000-0000-4000-8000-000000000002');
 
-insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code) values
-  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US'),
-  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US');
+insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code, region) values
+  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US', 'NY'),
+  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US', 'OR');
 
 insert into public.correspondents (requester_id, addressee_id, status) values
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'accepted');
@@ -47,12 +47,21 @@ insert into public.letters (
 -- Before collection ----------------------------------------------------------
 
 set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
-set local role authenticated;
+-- The mailbox read path runs as slowmail_reader, the role the SECURITY DEFINER
+-- readers are owned by. authenticated has no privilege on letters at all now,
+-- so asserting as authenticated would only ever prove "permission denied" and
+-- would stay green if the policy itself were deleted.
+set local role slowmail_reader;
 
+set local role authenticated;
+-- Executed as authenticated on purpose: these are client RPCs, and running
+-- them under any other role would hide a missing grant exactly the way the
+-- collection outage hid behind worker tests that ran as postgres.
 select lives_ok(
   $$ select public.revoke_letter('e1111111-0000-4000-8000-00000000000a') $$,
   'the sender can recall a letter that has not been collected'
 );
+set local role slowmail_reader;
 
 select is(
   (select state::text from public.letters where id = 'e1111111-0000-4000-8000-00000000000a'),
@@ -68,12 +77,17 @@ select isnt(
 
 -- After collection -----------------------------------------------------------
 
+set local role authenticated;
+-- Executed as authenticated on purpose: these are client RPCs, and running
+-- them under any other role would hide a missing grant exactly the way the
+-- collection outage hid behind worker tests that ran as postgres.
 select throws_ok(
   $$ select public.revoke_letter('e2222222-0000-4000-8000-00000000000a') $$,
   'SM001',
   null,
   'the sender cannot recall a letter the carrier already took'
 );
+set local role slowmail_reader;
 
 select is(
   (select state::text from public.letters where id = 'e2222222-0000-4000-8000-00000000000a'),

@@ -28,6 +28,7 @@ export type ClaimedLetter = {
 
 export type CollectionDeps = {
   claimBatch: (limit: number) => Promise<ClaimedLetter[]>;
+  releaseClaim: (letterId: string, reason: string) => Promise<void>;
   applyResults: (results: unknown[]) => Promise<{ applied: number; rescheduled: number }>;
   schedule: ScheduleFn;
   log?: (message: string, detail?: unknown) => void;
@@ -91,24 +92,23 @@ export async function runCollection(
         transitDays: computed.transitDays,
         deliverAt: computed.deliverAt,
         scheduleSource: "mailclock",
-        snapshot: {
-          senderTz: letter.sender_tz,
-          senderLat: letter.sender_lat,
-          senderLng: letter.sender_lng,
-          senderCountryCode: letter.sender_country_code,
-          senderRegion: letter.sender_region,
-          senderIsTerritory: letter.sender_is_territory,
-          recipientTz: letter.recipient_tz,
-          recipientLat: letter.recipient_lat,
-          recipientLng: letter.recipient_lng,
-          recipientCountryCode: letter.recipient_country_code,
-          recipientRegion: letter.recipient_region,
-          recipientIsTerritory: letter.recipient_is_territory,
-        },
       });
     } catch (error) {
       skipped++;
+      // The claim has to come back. A letter the engine refuses to schedule --
+      // a timezone it will not parse, say -- otherwise keeps its claim, is
+      // passed over by every later sweep, and nobody is told. Releasing it with
+      // the reason attached keeps it in the postbox, still revocable, and
+      // visible to whoever goes looking.
       deps.log?.("scheduling failed", { letterId: letter.letter_id, error: String(error) });
+      try {
+        await deps.releaseClaim(letter.letter_id, String(error));
+      } catch (releaseError) {
+        deps.log?.("releasing claim failed", {
+          letterId: letter.letter_id,
+          error: String(releaseError),
+        });
+      }
     }
   }
 

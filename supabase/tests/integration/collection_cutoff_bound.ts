@@ -16,6 +16,12 @@
 // satisfy "never late" while being useless, so each cutoff must also fall
 // strictly after the letter was written.
 //
+// The third is about what a user sees rather than what the sweep does. The iOS
+// app estimates arrival with the same weekday rule and no holidays, so a cutoff
+// landing on a Sunday is a date the app will never show and the two disagree in
+// public until the sweep corrects it. No cutoff may fall on a Sunday in the
+// sender's own zone.
+//
 //   deno run -A supabase/tests/integration/collection_cutoff_bound.ts
 
 const DB_CONTAINER = Deno.env.get("SLOWMAIL_DB_CONTAINER") ?? "supabase_db_slowmail";
@@ -41,8 +47,13 @@ const sql = `
   with cases (i, written_at, tz) as (values
     ${cases.map((c, i) => `(${i}, ${lit(c.writtenAt)}::timestamptz, ${lit(c.tz)})`).join(",\n    ")}
   )
-  select to_char(slowmail.next_collection_cutoff(tz, written_at) at time zone 'UTC',
-                 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+  select
+    to_char(slowmail.next_collection_cutoff(tz, written_at) at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    || '|' ||
+    -- Read back in the sender's zone: a cutoff is only "a Sunday" where the
+    -- sender is standing, which is the clock the app renders too.
+    extract(dow from slowmail.next_collection_cutoff(tz, written_at) at time zone tz)::int
   from cases order by i;
 `;
 
@@ -68,18 +79,26 @@ if (cutoffs.length !== cases.length) {
 }
 
 const results: Array<[boolean, string]> = [];
+let exact = 0;
+
 cases.forEach((c, i) => {
-  const cutoff = new Date(cutoffs[i]).getTime();
+  const [iso, dow] = cutoffs[i].split("|");
+  const cutoff = new Date(iso).getTime();
   const written = new Date(c.writtenAt).getTime();
   const collected = new Date(c.collectedAt).getTime();
+  if (cutoff === collected) exact++;
 
   results.push([
     cutoff <= collected,
-    `never late: ${c.name} — cutoff ${cutoffs[i]} <= collection ${c.collectedAt}`,
+    `never late: ${c.name} — cutoff ${iso} <= collection ${c.collectedAt}`,
   ]);
   results.push([
     cutoff > written,
-    `not vacuously early: ${c.name} — cutoff ${cutoffs[i]} > written ${c.writtenAt}`,
+    `not vacuously early: ${c.name} — cutoff ${iso} > written ${c.writtenAt}`,
+  ]);
+  results.push([
+    dow !== "0",
+    `never a Sunday in the sender's zone: ${c.name} — cutoff ${iso} (dow ${dow})`,
   ]);
 });
 
@@ -87,5 +106,10 @@ console.log(`1..${results.length}`);
 results.forEach(([pass, name], i) => console.log(`${pass ? "ok" : "not ok"} ${i + 1} - ${name}`));
 if (results.some(([pass]) => !pass)) Deno.exit(1);
 console.log(
-  `\nPASS: across ${cases.length} contract cases the SQL cutoff never runs past the engine's collection instant.`,
+  `\nPASS: across ${cases.length} contract cases the SQL cutoff never runs past the engine's ` +
+    `collection instant, and never lands on a Sunday.`,
+);
+console.log(
+  `${exact}/${cases.length} cutoffs are exactly the engine's instant; the rest are early ` +
+    `across federal holidays, which neither the sweep nor the app models and both defer to the engine on.`,
 );

@@ -57,9 +57,9 @@ cleanup
 
 if ! psql_run <<SQL >/dev/null
 insert into auth.users (id) values ('${SENDER}'), ('${RECIPIENT}');
-insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code) values
-  ('${SENDER}', 'Ada', 40.6782, -73.9442, 'America/New_York', 'US'),
-  ('${RECIPIENT}', 'Bo', 45.5152, -122.6784, 'America/Los_Angeles', 'US');
+insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code, region) values
+  ('${SENDER}', 'Ada', 40.6782, -73.9442, 'America/New_York', 'US', 'NY'),
+  ('${RECIPIENT}', 'Bo', 45.5152, -122.6784, 'America/Los_Angeles', 'US', 'OR');
 insert into public.correspondents (requester_id, addressee_id, status)
   values ('${SENDER}', '${RECIPIENT}', 'accepted');
 insert into public.devices (user_id, apns_token) values ('${RECIPIENT}', repeat('cd', 32));

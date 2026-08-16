@@ -10,6 +10,7 @@
 // is why deno.json enables sloppy-imports and maps luxon to npm:.
 
 export { nextCollection, schedule } from "@slowmail/mailclock";
+export { baseDomesticTransitDays, haversineMiles } from "@slowmail/mailclock";
 export type { Party, Recipient, Schedule, ScheduleInput } from "@slowmail/mailclock";
 
 import type { schedule as scheduleImpl } from "@slowmail/mailclock";

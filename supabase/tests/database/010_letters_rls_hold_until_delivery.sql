@@ -26,10 +26,10 @@ insert into auth.users (id) values
   ('b0000000-0000-4000-8000-000000000002'),  -- recipient
   ('c0000000-0000-4000-8000-000000000003');  -- unrelated third party
 
-insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng, timezone, country_code) values
-  ('a0000000-0000-4000-8000-000000000001', 'Ada',  'Brooklyn, NY',   40.6782,  -73.9442, 'America/New_York',    'US'),
-  ('b0000000-0000-4000-8000-000000000002', 'Bo',   'Portland, OR',   45.5152, -122.6784, 'America/Los_Angeles', 'US'),
-  ('c0000000-0000-4000-8000-000000000003', 'Cyd',  'Chicago, IL',    41.8781,  -87.6298, 'America/Chicago',     'US');
+insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng, timezone, country_code, region) values
+  ('a0000000-0000-4000-8000-000000000001', 'Ada',  'Brooklyn, NY',   40.6782,  -73.9442, 'America/New_York',    'US', 'NY'),
+  ('b0000000-0000-4000-8000-000000000002', 'Bo',   'Portland, OR',   45.5152, -122.6784, 'America/Los_Angeles', 'US', 'OR'),
+  ('c0000000-0000-4000-8000-000000000003', 'Cyd',  'Chicago, IL',    41.8781,  -87.6298, 'America/Chicago',     'US', 'IL');
 
 insert into public.correspondents (requester_id, addressee_id, status) values
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'accepted');
@@ -68,7 +68,11 @@ insert into public.letters (id, sender_id, recipient_id, body, state, written_at
 -- Before delivery ------------------------------------------------------------
 
 set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
-set local role authenticated;
+-- The mailbox read path runs as slowmail_reader, the role the SECURITY DEFINER
+-- readers are owned by. authenticated has no privilege on letters at all now,
+-- so asserting as authenticated would only ever prove "permission denied" and
+-- would stay green if the policy itself were deleted.
+set local role slowmail_reader;
 
 select is_empty(
   $$ select id from public.letters $$,
@@ -87,14 +91,14 @@ select is_empty(
 );
 
 select is(
-  (select count(*)::int from public.letters where recipient_id = auth.uid()),
+  (select count(*)::int from public.letters where recipient_id = slowmail.current_user_id()),
   0,
   'recipient: filtering by their own id does not widen what they can see'
 );
 
 reset role;
 set local request.jwt.claims = '{"sub":"c0000000-0000-4000-8000-000000000003","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select is(
   (select count(*)::int from public.letters),
@@ -104,7 +108,7 @@ select is(
 
 reset role;
 set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select is(
   (select count(*)::int from public.letters),
@@ -141,7 +145,7 @@ update public.letters
 alter table public.letters enable trigger letters_guard_write;
 
 set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select is(
   (select count(*)::int from public.letters),
@@ -163,7 +167,7 @@ select is(
 
 reset role;
 set local request.jwt.claims = '{"sub":"c0000000-0000-4000-8000-000000000003","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select is(
   (select count(*)::int from public.letters),
@@ -198,7 +202,7 @@ insert into public.letters (
 );
 
 set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select is_empty(
   $$ select id from public.letters where id = '22222222-0000-4000-8000-00000000000a' $$,
@@ -229,14 +233,19 @@ select is(
 -- predicate itself rather than inherit the policy.
 reset role;
 set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
+set local role authenticated;
+-- Executed as authenticated on purpose: these are client RPCs, and running
+-- them under any other role would hide a missing grant exactly the way the
+-- collection outage hid behind worker tests that ran as postgres.
 select throws_ok(
   $$ select public.mark_letter_read('22222222-0000-4000-8000-00000000000a') $$,
   'SM005',
   null,
   'recipient: cannot mark an undelivered letter read, which would confirm it exists'
 );
+set local role slowmail_reader;
 
 reset role;
 select * from finish();

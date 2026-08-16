@@ -81,9 +81,9 @@ await psql(`
   delete from auth.users where id in ('${SENDER}', '${RECIPIENT}');
 
   insert into auth.users (id) values ('${SENDER}'), ('${RECIPIENT}');
-  insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng, timezone, country_code) values
-    ('${SENDER}', 'Realtime Sender', 'New York, NY', 40.7128, -74.0060, 'America/New_York', 'US'),
-    ('${RECIPIENT}', 'Realtime Recipient', 'Los Angeles, CA', 34.0522, -118.2437, 'America/Los_Angeles', 'US');
+  insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng, timezone, country_code, region) values
+    ('${SENDER}', 'Realtime Sender', 'New York, NY', 40.7128, -74.0060, 'America/New_York', 'US', 'NY'),
+    ('${RECIPIENT}', 'Realtime Recipient', 'Los Angeles, CA', 34.0522, -118.2437, 'America/Los_Angeles', 'US', 'CA');
   insert into public.correspondents (requester_id, addressee_id, status, responded_at)
     values ('${SENDER}', '${RECIPIENT}', 'accepted', now());
 `);

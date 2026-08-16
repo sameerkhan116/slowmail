@@ -45,12 +45,17 @@ async function psql(sql: string): Promise<string> {
 const results: Array<[boolean, string]> = [];
 const ok = (pass: boolean, name: string) => results.push([pass, name]);
 
-// A read performed as the real authenticated role with the real JWT claims.
-// Running these as postgres would prove nothing: that role carries BYPASSRLS.
+// A read performed with the real JWT claims, as slowmail_reader -- the
+// non-BYPASSRLS role the mailbox RPCs are owned by and the role the letters
+// policies are actually evaluated under. Running these as postgres would prove
+// nothing, because that role carries BYPASSRLS. Running them as authenticated
+// would prove nothing either: authenticated holds no privilege on letters at
+// all now, so every one of these would come back denied rather than filtered,
+// and an assertion expecting zero rows would pass on the error.
 const asUser = (userId: string, query: string) => `
   begin;
   set local request.jwt.claims = '{"sub":"${userId}","role":"authenticated"}';
-  set local role authenticated;
+  set local role slowmail_reader;
   ${query}
   rollback;
 `;
@@ -70,12 +75,22 @@ await psql(`
     values ('${SENDER}', '${RECIPIENT}', 'accepted', now());
 
   -- Both are ordinary posted letters awaiting collection. Only written_at
-  -- differs, and the engine draws every other instant from that.
-  insert into public.letters (id, sender_id, recipient_id, body, state, written_at, collect_at) values
+  -- differs, and the engine draws every other instant from that. The routing
+  -- columns are the address snapshot post_letter freezes at posting; they are
+  -- set here rather than left null because a letter with no frozen address is
+  -- deliberately never claimed, and written_at has to predate this test run.
+  insert into public.letters (id, sender_id, recipient_id, body, state, written_at, collect_at,
+                              sender_tz, sender_lat, sender_lng, sender_country_code, sender_region,
+                              recipient_tz, recipient_lat, recipient_lng, recipient_country_code, recipient_region,
+                              routing_snapshot_at) values
     ('${LANDED}',    '${SENDER}', '${RECIPIENT}', 'Posted a month ago.', 'awaiting_collection',
-      now() - interval '30 days', now() - interval '30 days'),
+      now() - interval '30 days', now() - interval '30 days',
+      'America/New_York', 40.6782, -73.9442, 'US', 'NY',
+      'America/Los_Angeles', 45.5152, -122.6784, 'US', 'OR', now() - interval '30 days'),
     ('${IN_FLIGHT}', '${SENDER}', '${RECIPIENT}', 'Posted this week.',   'awaiting_collection',
-      now() - interval '3 days', now() - interval '3 days');
+      now() - interval '3 days', now() - interval '3 days',
+      'America/New_York', 40.6782, -73.9442, 'US', 'NY',
+      'America/Los_Angeles', 45.5152, -122.6784, 'US', 'OR', now() - interval '3 days');
 `);
 
 const claimed: ClaimedLetter[] = JSON.parse(

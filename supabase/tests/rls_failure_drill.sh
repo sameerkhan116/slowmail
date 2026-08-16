@@ -22,7 +22,7 @@ restore_policy() {
   psql_run >/dev/null <<'SQL'
 alter policy letters_select_recipient on public.letters
   using (
-    recipient_id = (select auth.uid())
+    recipient_id = (select slowmail.current_user_id())
     and deliver_at is not null
     and deliver_at <= now()
   );
@@ -34,7 +34,7 @@ trap restore_policy EXIT
 echo "== weakening letters_select_recipient: dropping the deliver_at condition =="
 psql_run >/dev/null <<'SQL'
 alter policy letters_select_recipient on public.letters
-  using (recipient_id = (select auth.uid()));
+  using (recipient_id = (select slowmail.current_user_id()));
 SQL
 
 weakened_output="$(psql_run < "$SUITE" 2>&1)"

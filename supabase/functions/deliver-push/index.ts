@@ -25,6 +25,13 @@ Deno.serve(async (req) => {
         const { error } = await db.rpc("complete_push", { p_outbox_id: outboxId, p_error: err });
         if (error) throw new Error(`complete_push: ${error.message}`);
       },
+      recordDelivery: async (outboxId, token) => {
+        const { error } = await db.rpc("record_push_delivery", {
+          p_outbox_id: outboxId,
+          p_apns_token: token,
+        });
+        if (error) throw new Error(`record_push_delivery: ${error.message}`);
+      },
       pruneToken: async (token, reason) => {
         const { error } = await db.rpc("revoke_apns_token", {
           p_apns_token: token,

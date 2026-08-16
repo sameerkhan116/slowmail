@@ -12,17 +12,21 @@ insert into auth.users (id) values
   ('b0000000-0000-4000-8000-000000000002'),
   ('c0000000-0000-4000-8000-000000000003');
 
-insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code) values
-  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US'),
-  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US'),
-  ('c0000000-0000-4000-8000-000000000003', 'Cyd', 41.8781,  -87.6298, 'America/Chicago',     'US');
+insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code, region) values
+  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US', 'NY'),
+  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US', 'OR'),
+  ('c0000000-0000-4000-8000-000000000003', 'Cyd', 41.8781,  -87.6298, 'America/Chicago',     'US', 'IL');
 
 insert into public.correspondents (requester_id, addressee_id, status) values
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'accepted'),
   ('a0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000003', 'pending');
 
 set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
-set local role authenticated;
+-- The mailbox read path runs as slowmail_reader, the role the SECURITY DEFINER
+-- readers are owned by. authenticated has no privilege on letters at all now,
+-- so asserting as authenticated would only ever prove "permission denied" and
+-- would stay green if the policy itself were deleted.
+set local role slowmail_reader;
 
 -- Schedule columns are not in the client's INSERT grant, so this is rejected by
 -- the privilege system before any policy or trigger is consulted.
@@ -90,7 +94,7 @@ select is(
 
 select is(
   (select sender_id from public.letters where body like 'Draft %'),
-  auth.uid(),
+  slowmail.current_user_id(),
   'sender_id is taken from the JWT, not from the request body'
 );
 
@@ -102,10 +106,15 @@ select lives_ok(
 
 -- Posting -------------------------------------------------------------------
 
+set local role authenticated;
+-- Executed as authenticated on purpose: these are client RPCs, and running
+-- them under any other role would hide a missing grant exactly the way the
+-- collection outage hid behind worker tests that ran as postgres.
 select lives_ok(
-  $$ select public.post_letter((select id from public.letters where body = 'Draft two.')) $$,
+  $$ select public.post_letter((select id from public.outbox() where body = 'Draft two.')) $$,
   'the writer can post their own draft'
 );
+set local role slowmail_reader;
 
 select is(
   (select state::text from public.letters where body like 'Draft %'),
@@ -149,7 +158,7 @@ select throws_ok(
 -- Impersonation ---------------------------------------------------------------
 
 set local request.jwt.claims = '{"sub":"c0000000-0000-4000-8000-000000000003","role":"authenticated"}';
-set local role authenticated;
+set local role slowmail_reader;
 
 select throws_ok(
   $$ insert into public.letters (recipient_id, body)

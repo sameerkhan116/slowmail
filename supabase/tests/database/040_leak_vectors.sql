@@ -16,10 +16,10 @@ insert into auth.users (id) values
   ('b0000000-0000-4000-8000-000000000002'),
   ('c0000000-0000-4000-8000-000000000003');
 
-insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code) values
-  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US'),
-  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US'),
-  ('c0000000-0000-4000-8000-000000000003', 'Cyd', 41.8781,  -87.6298, 'America/Chicago',     'US');
+insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code, region) values
+  ('a0000000-0000-4000-8000-000000000001', 'Ada', 40.6782,  -73.9442, 'America/New_York',    'US', 'NY'),
+  ('b0000000-0000-4000-8000-000000000002', 'Bo',  45.5152, -122.6784, 'America/Los_Angeles', 'US', 'OR'),
+  ('c0000000-0000-4000-8000-000000000003', 'Cyd', 41.8781,  -87.6298, 'America/Chicago',     'US', 'IL');
 
 insert into public.correspondents (requester_id, addressee_id, status) values
   ('a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'accepted');
@@ -121,7 +121,11 @@ select ok(
 -- Behavioural checks, as the recipient ----------------------------------------
 
 set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
-set local role authenticated;
+-- The mailbox read path runs as slowmail_reader, the role the SECURITY DEFINER
+-- readers are owned by. authenticated has no privilege on letters at all now,
+-- so asserting as authenticated would only ever prove "permission denied" and
+-- would stay green if the policy itself were deleted.
+set local role slowmail_reader;
 
 select is(
   (select count(*)::int from public.letters),
@@ -152,11 +156,22 @@ select is_empty(
   'DELETE ... RETURNING leaks nothing'
 );
 
+-- Run on the path a client actually has: mailbox() plus the profiles table.
+-- Asserting this as a role with no privilege on letters would pass on a
+-- permission error rather than on the rule holding.
+reset role;
+set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
+set local role authenticated;
+
 select is(
-  (select count(*)::int from public.letters l join public.profiles p on p.id = l.sender_id),
+  (select count(*)::int from public.mailbox() m join public.profiles p on p.id = m.sender_id),
   0,
   'joining out to the sender profile does not resurrect the row'
 );
+
+reset role;
+set local request.jwt.claims = '{"sub":"b0000000-0000-4000-8000-000000000002","role":"authenticated"}';
+set local role slowmail_reader;
 
 -- The correspondent helper answers "is this person my correspondent", never
 -- "are these two people connected", so it cannot be used to map strangers.
