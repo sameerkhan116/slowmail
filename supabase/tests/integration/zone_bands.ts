@@ -18,6 +18,18 @@
 //   deno test -A --config supabase/functions/deno.json supabase/tests/integration/zone_bands.ts
 
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+
+// This is the only suite here built on Deno.test. Under `deno run` the cases
+// register and nothing executes, so it prints nothing and exits 0 -- a suite
+// that passes by not existing. Refuse that invocation instead of reporting
+// silence as success.
+if (import.meta.main) {
+  console.error(
+    "zone_bands.ts holds Deno.test cases and was started with `deno run`, " +
+      "which registers them without running any. Use `deno test`.",
+  );
+  Deno.exit(1);
+}
 import { baseDomesticTransitDays, haversineMiles, schedule } from "../../functions/_shared/mailclock.ts";
 
 const DB_CONTAINER = Deno.env.get("SLOWMAIL_DB_CONTAINER") ?? "supabase_db_slowmail";

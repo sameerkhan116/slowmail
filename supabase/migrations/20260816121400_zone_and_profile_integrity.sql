@@ -120,8 +120,12 @@ begin
   where p.id = p_user_id
     and exists (
       select 1 from public.correspondents c
-      where (c.requester_id = auth.uid() and c.addressee_id = p.id)
-         or (c.addressee_id = auth.uid() and c.requester_id = p.id)
+      where ((c.requester_id = auth.uid() and c.addressee_id = p.id)
+          or (c.addressee_id = auth.uid() and c.requester_id = p.id))
+        -- An edge alone is not permission. declined and blocked are edges too,
+        -- and blocking someone has to stop them reading you or it is not
+        -- blocking -- so the status is tested, not just the connection.
+        and c.status in ('pending', 'accepted')
     );
 end;
 $$;

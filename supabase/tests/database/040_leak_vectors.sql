@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, pg_catalog;
 
-select plan(19);
+select plan(25);
 
 insert into auth.users (id) values
   ('a0000000-0000-4000-8000-000000000001'),
@@ -194,6 +194,71 @@ select is(
   (select count(*)::int from public.profiles),
   1,
   'an outsider sees only their own profile'
+);
+
+-- The correspondent card ------------------------------------------------------
+--
+-- The card exists so a pending request can show a name, which means it answers
+-- for people who are not correspondents yet. An edge is not permission, though:
+-- declined and blocked are edges too, and a block that still lets the blocker
+-- read you is not a block.
+reset role;
+
+insert into auth.users (id) values
+  ('d0000000-0000-4000-8000-000000000004'),
+  ('e0000000-0000-4000-8000-000000000005'),
+  ('f0000000-0000-4000-8000-000000000006');
+
+insert into public.profiles (id, display_name, home_lat, home_lng, timezone, country_code, region) values
+  ('d0000000-0000-4000-8000-000000000004', 'Dee', 39.9526, -75.1652, 'America/New_York', 'US', 'PA'),
+  ('e0000000-0000-4000-8000-000000000005', 'Eli', 42.3601, -71.0589, 'America/New_York', 'US', 'MA'),
+  ('f0000000-0000-4000-8000-000000000006', 'Fay', 47.6062, -122.3321, 'America/Los_Angeles', 'US', 'WA');
+
+insert into public.correspondents (requester_id, addressee_id, status) values
+  ('a0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000003', 'pending'),
+  ('a0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000004', 'declined'),
+  ('e0000000-0000-4000-8000-000000000005', 'a0000000-0000-4000-8000-000000000001', 'blocked');
+
+set local request.jwt.claims = '{"sub":"a0000000-0000-4000-8000-000000000001","role":"authenticated"}';
+set local role authenticated;
+
+select is(
+  (select count(*)::int from public.correspondent_card('c0000000-0000-4000-8000-000000000003')),
+  1,
+  'someone you have asked to write to still shows a name, which is what the card is for'
+);
+
+select is(
+  (select count(*)::int from public.correspondent_card('b0000000-0000-4000-8000-000000000002')),
+  1,
+  'an accepted correspondent shows a name'
+);
+
+select is(
+  (select count(*)::int from public.correspondent_card('d0000000-0000-4000-8000-000000000004')),
+  0,
+  'a request that was declined stops answering'
+);
+
+select is(
+  (select count(*)::int from public.correspondent_card('e0000000-0000-4000-8000-000000000005')),
+  0,
+  'someone who blocked you cannot be read through the card'
+);
+
+select is(
+  (select count(*)::int from public.correspondent_card('f0000000-0000-4000-8000-000000000006')),
+  0,
+  'a stranger with no edge at all is not readable'
+);
+
+-- Guards the other half of the promise: the card cannot start carrying
+-- coordinates just because someone adds a column to its return table.
+select is(
+  (select array_length(proallargtypes, 1) - pronargs
+     from pg_proc where oid = 'public.correspondent_card(uuid)'::regprocedure),
+  3,
+  'the card returns exactly three columns, so a location cannot ride along'
 );
 
 reset role;

@@ -37,6 +37,71 @@ begin
 end;
 $$;
 
+-- Creating the role only when it is absent means a database that already has a
+-- role of this name silently adopts it, whatever it is. That is the one
+-- adoption that cannot be allowed to pass quietly: this role is the whole
+-- reason the mailbox functions are still subject to RLS, so a pre-existing
+-- slowmail_reader carrying BYPASSRLS would turn the hold off for every
+-- recipient with nothing anywhere reporting it. The attributes are therefore
+-- asserted rather than inferred from the create above.
+--
+-- NOSUPERUSER is not in the ALTER below because it cannot be: the migration
+-- role here has CREATEROLE and BYPASSRLS but not SUPERUSER, and Postgres
+-- refuses `alter role ... nosuperuser` from a non-superuser whatever the
+-- target's attributes are. A superuser slowmail_reader is therefore
+-- unrepairable from inside a migration, and is the one case that aborts.
+do $$
+declare
+  v_bad text[];
+begin
+  if exists (select 1 from pg_roles where rolname = 'slowmail_reader' and rolsuper) then
+    raise exception
+      'slowmail_reader exists as a SUPERUSER and cannot be demoted from a migration. '
+      'Refusing to continue: the mailbox functions would run as a role that bypasses '
+      'every policy, which would disclose undelivered mail to its recipient.';
+  end if;
+
+  select array_agg(a) into v_bad
+  from (
+    select 'BYPASSRLS'  a from pg_roles where rolname = 'slowmail_reader' and rolbypassrls
+    union all select 'LOGIN'       from pg_roles where rolname = 'slowmail_reader' and rolcanlogin
+    union all select 'CREATEROLE'  from pg_roles where rolname = 'slowmail_reader' and rolcreaterole
+    union all select 'CREATEDB'    from pg_roles where rolname = 'slowmail_reader' and rolcreatedb
+    union all select 'REPLICATION' from pg_roles where rolname = 'slowmail_reader' and rolreplication
+    union all select 'INHERIT'     from pg_roles where rolname = 'slowmail_reader' and rolinherit
+  ) s;
+
+  if v_bad is not null then
+    -- A warning and a repair rather than an abort, and the direction matters.
+    -- Aborting here would roll back this migration's `revoke all on
+    -- public.letters`, leaving the table readable over the Data API and the
+    -- planner-count leak open. Failing closed on the role would mean failing
+    -- open on the thing the role exists to protect, so the attributes are
+    -- corrected below and the surprise is reported loudly.
+    raise warning 'slowmail_reader already existed with % -- something outside these migrations created it. Attributes are being reset; investigate why it was there.',
+      array_to_string(v_bad, ', ');
+  end if;
+end;
+$$;
+
+alter role slowmail_reader
+  nologin noinherit nobypassrls nocreaterole nocreatedb noreplication;
+
+-- The ALTER above is the repair; this is the assertion. They are separate
+-- because a repair that silently did nothing would look exactly like a repair
+-- that worked.
+do $$
+begin
+  if not exists (
+    select 1 from pg_roles
+    where rolname = 'slowmail_reader'
+      and not rolsuper and not rolbypassrls and not rolcanlogin and not rolinherit
+  ) then
+    raise exception 'slowmail_reader still carries an attribute that would defeat RLS after normalisation';
+  end if;
+end;
+$$;
+
 do $$
 begin
   execute format('grant slowmail_reader to %I', current_user);

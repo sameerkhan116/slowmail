@@ -66,18 +66,23 @@ supabase db reset          # applies all migrations from scratch
 ```
 
 ```sh
-supabase test db                                     # pgTAP: 91 assertions
+supabase test db                                     # pgTAP: 97 assertions
 ./supabase/tests/rls_failure_drill.sh                # the suite must be able to fail
 ./supabase/tests/concurrency/delivery_concurrency.sh # two overlapping backends
 
 C="--config supabase/functions/deno.json"
 deno run -A $C supabase/tests/integration/schedule_roundtrip.ts    # engine instants through RLS
 deno run -A $C supabase/tests/integration/postgrest_count_leak.ts  # the HTTP layer, not SQL
+deno run -A $C supabase/tests/integration/reader_role_hardening.ts # the role the hold rests on
 deno run -A $C supabase/tests/integration/collection_cutoff_bound.ts
 deno run -A $C supabase/tests/realtime/realtime_leak_probe.ts
 deno test -A $C supabase/tests/integration/zone_bands.ts           # far zone vs territory
 deno test -A $C supabase/functions/tests/                          # worker logic, no network
 ```
+
+`zone_bands.ts` is the one suite built on `Deno.test`, so it needs `deno test`.
+Started with `deno run` it would register its cases, run none, print nothing and
+exit 0 — passing by not existing. It now refuses that invocation and exits 1.
 
 Every assertion runs under the role that would really make the request, with
 real `request.jwt.claims`. This is not incidental, and it is not one rule but
@@ -126,6 +131,50 @@ which owns it. The grant is restored, and the worker tests now run under
 `set local role service_role` so the next omission fails the suite rather than
 the product.
 
+## The role the hold rests on
+
+Taking `letters` off the Data API moved the whole hold onto one role. The mailbox
+functions are `SECURITY DEFINER` and owned by `slowmail_reader` precisely because
+that role has neither `BYPASSRLS` nor ownership of the table, so
+`letters_select_recipient` still applies inside the function body. Every property
+in this README is downstream of that one attribute being off.
+
+`create role ... if not exists` is therefore not enough. On a database where a
+role of that name already exists, the migration would adopt it — and a
+pre-existing `slowmail_reader` carrying `BYPASSRLS` turns the hold off with no
+error anywhere. The migration now normalises the role unconditionally after
+creating it, warns about every dangerous attribute it found already set, and
+re-checks afterwards.
+
+`SUPERUSER` is the exception and it aborts instead, because it cannot be
+repaired: `ALTER ROLE ... NOSUPERUSER` requires the *caller* to be a superuser,
+and the migration role is not one — it fails even when the target is an ordinary
+role. Nothing else aborts, because aborting would roll back the same migration's
+`revoke ... on public.letters`, and failing closed on the role would mean failing
+open on the table the role exists to protect.
+
+`reader_role_hardening.ts` measures the leak rather than asserting the catalog
+bit. It sets `BYPASSRLS` on the role and watches the recipient's own count of
+in-transit mail go from 0 to 1, then re-applies the migration and watches it go
+back to 0. It also asserts that `postgres` reads 1 in *both* states — the same
+assertion written as `postgres` cannot tell a working hold from a disabled one,
+which is the third time that shape has come up here.
+
+## What a correspondent can read about you
+
+`correspondent_card` returns three columns — id, display name, home city label —
+and nothing else, so a request never discloses the routing coordinates,
+`region` or `is_territory` that a profile carries. It is filtered to `pending`
+and `accepted` edges: an edge is a record that something happened, not a standing
+permission, so `declined` and `blocked` return nothing. Blocking someone has to
+stop them reading you or it is not blocking.
+
+Accepting someone is a different matter. An accepted correspondent can read the
+full profile, coordinates included. That is deliberate rather than overlooked —
+it is the deal you make by accepting, and it is what lets a client show where
+mail is coming from — but it is the one place where a social action hands over a
+location.
+
 ## Proving the new tests can fail
 
 Each fix was reverted against a live stack and the matching test required to go
@@ -137,6 +186,8 @@ red:
 | `claim_collection_batch` rewritten to join live `profiles` | red: `have: Europe/Lisbon, want: America/New_York` |
 | `drop constraint profiles_territory_excludes_states` | red: the database stored a Puerto Rico territory profile |
 | push drain limited to a single batch | red: the drain stopped before the outbox was empty |
+| the whole `slowmail_reader` normalisation block removed | 3/8 red in `reader_role_hardening`, including the behavioural one: *the recipient is back to seeing 1 letters* |
+| `correspondent_card` status filter removed | 2 red in `040_leak_vectors`: `declined` and `blocked` edges both returned the card |
 
 The second of those is worth reading twice. The suite was green under the
 live-profile mutation until a test was added at the level where the bug can
