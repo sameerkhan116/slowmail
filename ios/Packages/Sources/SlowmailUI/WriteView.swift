@@ -14,6 +14,7 @@ public struct WriteView: View {
     private let estimatedArrival: Date
     private let now: Date
     private let isPosting: Bool
+    private let alreadyPosted: Bool
     private let onPost: () -> Void
     private let onPickRecipient: () -> Void
 
@@ -24,6 +25,7 @@ public struct WriteView: View {
         estimatedArrival: Date,
         now: Date,
         isPosting: Bool = false,
+        alreadyPosted: Bool = false,
         onPost: @escaping () -> Void = {},
         onPickRecipient: @escaping () -> Void = {}
     ) {
@@ -33,6 +35,7 @@ public struct WriteView: View {
         self.estimatedArrival = estimatedArrival
         self.now = now
         self.isPosting = isPosting
+        self.alreadyPosted = alreadyPosted
         self.onPost = onPost
         self.onPickRecipient = onPickRecipient
     }
@@ -110,9 +113,17 @@ public struct WriteView: View {
         PostalWording.collection(nextCollection, asOf: now)
     }
 
+    private var postLabel: String {
+        if isPosting { return "Posting" }
+        // These exact words went out already. Saying "Post" would invite the
+        // sender to send the same letter twice.
+        if alreadyPosted { return "Posted" }
+        return "Post"
+    }
+
     private var postButton: some View {
         Button(action: onPost) {
-            Text(isPosting ? "Posting" : "Post")
+            Text(postLabel)
                 .font(Theme.Typeface.sectionTitle)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Space.snug)
@@ -125,7 +136,7 @@ public struct WriteView: View {
     }
 
     private var canPost: Bool {
-        !isPosting && recipient != nil
+        !isPosting && !alreadyPosted && recipient != nil
             && !body_.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

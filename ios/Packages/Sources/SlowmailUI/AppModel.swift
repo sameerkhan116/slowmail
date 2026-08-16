@@ -17,9 +17,11 @@ public final class AppModel {
     public private(set) var lastError: String?
 
     private let store: any MailStore
+    private let userID: String
     private let clock: any Clock
 
-    public init(store: any MailStore, clock: any Clock) {
+    public init(store: any MailStore, clock: any Clock, userID: String = Fixtures.userID) {
+        self.userID = userID
         self.store = store
         self.clock = clock
     }
@@ -32,8 +34,19 @@ public final class AppModel {
     /// fills when the post comes.
     public var nextBoundary: Date? {
         let collection = PostalCalendar.nextCollection(after: clock.now)
-        guard let carrier = carrierExpected, carrier > clock.now else { return collection }
-        return min(carrier, collection)
+        if let carrier = carrierExpected, carrier > clock.now {
+            return min(carrier, collection)
+        }
+        // The round has been, as far as this device can tell. It computes that
+        // instant from its own copy of the timezone database, which can put it
+        // up to an hour ahead of the server's — long enough to stop watching
+        // just before the mail it is waiting for actually lands. So keep
+        // checking until the skew window has passed.
+        if let round = PostalCalendar.carrierArrival(forRecipient: userID, on: clock.now) {
+            let settled = round.addingTimeInterval(PostalCalendar.maximumRoundSkew)
+            if settled > clock.now { return min(settled, collection) }
+        }
+        return collection
     }
 
     public func load() async {

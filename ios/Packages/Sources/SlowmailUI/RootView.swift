@@ -9,11 +9,9 @@ public struct RootView: View {
     /// Kept per correspondent. One shared buffer would carry a half-written
     /// letter for one person into the composer for another, which is the one
     /// mistake this app has no way to undo once the box is emptied.
-    @State private var drafts: [CorrespondentID: String] = [:]
+    @State private var drafts = DraftLedger()
     @State private var isPosting = false
-    /// Bumped every time a composer opens, so a post that finishes after the
-    /// sender has closed and reopened the sheet cannot clear the new draft.
-    @State private var composerGeneration = 0
+
 
     public init(store: any MailStore, clock: any Clock) {
         _model = State(initialValue: AppModel(store: store, clock: clock))
@@ -63,7 +61,7 @@ public struct RootView: View {
             // A new sheet is a new writing session. Closing one is not, so a
             // post in flight when the sender walks away still tidies up after
             // itself.
-            if opened != nil { composerGeneration += 1 }
+            if opened != nil { drafts.openComposer() }
         }
         .sheet(item: $composing) { person in
             WriteView(
@@ -76,6 +74,7 @@ public struct RootView: View {
                 ),
                 now: model.now,
                 isPosting: isPosting,
+                alreadyPosted: drafts.isAlreadyPosted(person.id),
                 onPost: { post(to: person) }
             )
         }
@@ -83,8 +82,8 @@ public struct RootView: View {
 
     private func draftBinding(for id: CorrespondentID) -> Binding<String> {
         Binding(
-            get: { drafts[id] ?? "" },
-            set: { drafts[id] = $0 }
+            get: { drafts.body(for: id) },
+            set: { drafts.setBody($0, for: id) }
         )
     }
 
@@ -93,8 +92,9 @@ public struct RootView: View {
     /// after five.
     private func post(to person: Correspondent) {
         guard !isPosting else { return }
-        let body = drafts[person.id] ?? ""
-        let sent = composerGeneration
+        let body = drafts.body(for: person.id)
+        guard drafts.canPost(person.id) else { return }
+        let sent = drafts.currentGeneration
         isPosting = true
         Task {
             defer { isPosting = false }
@@ -106,9 +106,9 @@ public struct RootView: View {
             // person and retyping the same words is indistinguishable from
             // never having left, and clearing then would delete a draft the
             // sender is still writing. Only the session that sent may clear it.
-            guard composerGeneration == sent else { return }
-            drafts[person.id] = nil
-            composing = nil
+            if drafts.completePost(of: body, to: person.id, sentUnder: sent) {
+                composing = nil
+            }
         }
     }
 

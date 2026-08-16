@@ -25,6 +25,16 @@ public enum PostalCalendar {
     public static let earliestDeliveryHour = 9
     public static let latestDeliveryHour = 17
 
+    /// How far a client's idea of the round may run ahead of the server's.
+    ///
+    /// Both draw the same wall-clock time from the same seed, but resolve it
+    /// against their own timezone database. Where those disagree about a zone's
+    /// rules the same local time is a different instant, and the largest such
+    /// disagreement in practice is a one-hour offset change. A client that
+    /// stops watching at its own round would otherwise miss mail the server is
+    /// still holding.
+    public static let maximumRoundSkew: TimeInterval = 60 * 60
+
     public static func isPostalDay(_ date: Date, calendar: Calendar = .postal) -> Bool {
         calendar.component(.weekday, from: date) != 1
     }

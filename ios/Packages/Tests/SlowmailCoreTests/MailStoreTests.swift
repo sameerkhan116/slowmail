@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import SlowmailCore
+@testable import SlowmailUI
 
 /// A fixed instant on Thursday 20 August 2026, 15:40 New York — after that
 /// day's delivery, before that day's collection.
@@ -705,12 +706,131 @@ struct EmptyStateHonesty {
     @Test("Empty-state copy makes no claim about what was posted")
     func emptyStateClaimsNothing() {
         let foreclosing = ["nothing was posted", "no one wrote", "nothing came",
-                           "nothing for you today", "no letters were sent"]
-        for line in [PostalWording.emptyMailboxDetail, PostalWording.emptyMailboxWaitingDetail] {
+                           "nothing for you today", "no letters were sent", "no mail"]
+        for line in [PostalWording.emptyMailboxDetail, PostalWording.emptyMailboxWaitingDetail,
+                     PostalWording.nothingComingToday] {
             let lowered = line.lowercased()
             for phrase in foreclosing {
                 #expect(!lowered.contains(phrase), "\"\(line)\" claims the day is finished")
             }
         }
+    }
+}
+
+/// The client works out the round from its own timezone database, which can put
+/// it up to an hour ahead of the server's. A mailbox left open must keep looking
+/// through that window, or it stops watching just before the mail lands.
+@Suite("Watching continues through the skew window")
+@MainActor
+struct RoundSkewWindow {
+
+    @Test("The app keeps checking after it believes the round has been")
+    func watchesPastTheRound() async throws {
+        let round = try #require(
+            PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: thursdayAfternoon))
+        let justAfter = round.addingTimeInterval(60)
+        let model = AppModel(
+            store: MockMailStore(clock: FixedClock(now: justAfter)),
+            clock: FixedClock(now: justAfter))
+        await model.load()
+
+        #expect(model.carrierExpected == nil, "the round is over by the client's reckoning")
+        let boundary = try #require(model.nextBoundary)
+        let collection = PostalCalendar.nextCollection(after: justAfter)
+        #expect(boundary < collection, "waiting for collection would miss a late delivery")
+        #expect(boundary <= round.addingTimeInterval(PostalCalendar.maximumRoundSkew))
+    }
+
+    @Test("Once the window has passed it waits for collection")
+    func settlesAfterTheWindow() async throws {
+        let round = try #require(
+            PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: thursdayAfternoon))
+        let settled = round.addingTimeInterval(PostalCalendar.maximumRoundSkew + 60)
+        let model = AppModel(
+            store: MockMailStore(clock: FixedClock(now: settled)),
+            clock: FixedClock(now: settled))
+        await model.load()
+        #expect(model.nextBoundary == PostalCalendar.nextCollection(after: settled))
+    }
+}
+
+/// Posting is asynchronous and the composer can be closed and reopened while a
+/// letter is in flight. Matching on the text alone cannot tell that apart from
+/// someone retyping the same reply, and gets it wrong in both directions.
+@Suite("A draft is owned by the session that wrote it")
+struct DraftLedgerTests {
+
+    @Test("The ordinary path clears the draft and closes the sheet")
+    func ordinaryPost() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Dear Ben", for: "c-ben")
+        let sent = ledger.currentGeneration
+        let closed = ledger.completePost(of: "Dear Ben", to: "c-ben", sentUnder: sent)
+        #expect(closed)
+        #expect(ledger.body(for: "c-ben").isEmpty)
+    }
+
+    @Test("Closing the sheet without reopening still tidies up")
+    func closedButNotReopened() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Dear Ben", for: "c-ben")
+        let sent = ledger.currentGeneration
+        // The sender dismissed the sheet; no new session began.
+        let closed = ledger.completePost(of: "Dear Ben", to: "c-ben", sentUnder: sent)
+        #expect(closed)
+        #expect(ledger.body(for: "c-ben").isEmpty)
+    }
+
+    @Test("Reopening keeps what the sender is typing now")
+    func reopenedKeepsLiveTyping() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Dear Ben", for: "c-ben")
+        let sent = ledger.currentGeneration
+        ledger.openComposer()
+        ledger.setBody("Actually, something else", for: "c-ben")
+        let closed = ledger.completePost(of: "Dear Ben", to: "c-ben", sentUnder: sent)
+        #expect(!closed)
+        #expect(ledger.body(for: "c-ben") == "Actually, something else")
+        #expect(ledger.canPost("c-ben"))
+    }
+
+    @Test("The same words cannot be posted twice")
+    func strandedTextCannotBeResent() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Dear Ben", for: "c-ben")
+        let sent = ledger.currentGeneration
+        // Dismissed and reopened while the post was in flight, so the text that
+        // went out is still sitting in the box.
+        ledger.openComposer()
+        let closed = ledger.completePost(of: "Dear Ben", to: "c-ben", sentUnder: sent)
+        #expect(!closed)
+        #expect(ledger.body(for: "c-ben") == "Dear Ben")
+        #expect(ledger.isAlreadyPosted("c-ben"))
+        #expect(!ledger.canPost("c-ben"), "posting again would send a duplicate")
+    }
+
+    @Test("Changing a word makes it a new letter")
+    func editingClearsTheDuplicateBlock() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Dear Ben", for: "c-ben")
+        let sent = ledger.currentGeneration
+        ledger.openComposer()
+        ledger.completePost(of: "Dear Ben", to: "c-ben", sentUnder: sent)
+        #expect(!ledger.canPost("c-ben"))
+        ledger.setBody("Dear Ben,", for: "c-ben")
+        #expect(ledger.canPost("c-ben"))
+    }
+
+    @Test("Blank drafts are not postable")
+    func blankIsNotPostable() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("   \n ", for: "c-ben")
+        #expect(!ledger.canPost("c-ben"))
     }
 }

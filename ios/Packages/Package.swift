@@ -12,6 +12,6 @@ let package = Package(
         .target(name: "SlowmailCore"),
         .target(name: "SlowmailUI", dependencies: ["SlowmailCore"]),
         .executableTarget(name: "Screenshots", dependencies: ["SlowmailUI", "SlowmailCore"]),
-        .testTarget(name: "SlowmailCoreTests", dependencies: ["SlowmailCore"]),
+        .testTarget(name: "SlowmailCoreTests", dependencies: ["SlowmailCore", "SlowmailUI"]),
     ]
 )
