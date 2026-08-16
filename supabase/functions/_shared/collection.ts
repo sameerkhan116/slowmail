@@ -1,0 +1,147 @@
+// Collection: turn letters that are due into scheduled, in-transit mail.
+//
+// The database hands over a batch along with the sender's and recipient's
+// routing inputs as they stand at this moment. Those inputs are written back
+// onto the letter, so the schedule is a snapshot and a later move cannot
+// retime mail that has already been collected.
+
+import type { ScheduleFn } from "./mailclock.ts";
+
+export type ClaimedLetter = {
+  letter_id: string;
+  written_at: string;
+  sender_user_id: string;
+  sender_tz: string;
+  sender_lat: number | null;
+  sender_lng: number | null;
+  sender_country_code: string;
+  sender_region: string | null;
+  sender_is_territory: boolean;
+  recipient_user_id: string;
+  recipient_tz: string;
+  // The recipient's zone as it stands now, as opposed to the one frozen on the
+  // envelope. It decides only what time of day the carrier calls; every input
+  // that decides how long the post takes is read from the envelope.
+  recipient_live_tz: string;
+  recipient_lat: number | null;
+  recipient_lng: number | null;
+  recipient_country_code: string;
+  recipient_region: string | null;
+  recipient_is_territory: boolean;
+};
+
+export type CollectionDeps = {
+  claimBatch: (limit: number) => Promise<ClaimedLetter[]>;
+  releaseClaim: (letterId: string, reason: string) => Promise<void>;
+  applyResults: (results: unknown[]) => Promise<{ applied: number; rescheduled: number }>;
+  schedule: ScheduleFn;
+  log?: (message: string, detail?: unknown) => void;
+};
+
+export async function runCollection(
+  deps: CollectionDeps,
+  limit = 200,
+): Promise<{ claimed: number; applied: number; rescheduled: number; skipped: number }> {
+  const batch = await deps.claimBatch(limit);
+  if (batch.length === 0) {
+    return { claimed: 0, applied: 0, rescheduled: 0, skipped: 0 };
+  }
+
+  const results: unknown[] = [];
+  let skipped = 0;
+
+  for (const letter of batch) {
+    // A profile with no coordinates cannot be routed. `post_letter` now refuses
+    // to create such a letter, so this is the pre-existing rows and nothing
+    // else -- but it still has to release the claim and say why. Skipping
+    // silently left the letter claimed, passed over by every later sweep once
+    // the reclaim window was the only thing freeing it, and invisible to
+    // anyone looking for stuck mail.
+    if (
+      letter.sender_lat === null || letter.sender_lng === null ||
+      letter.recipient_lat === null || letter.recipient_lng === null
+    ) {
+      skipped++;
+      const reason = "unlocatable profile: a sender or recipient has no coordinates";
+      deps.log?.("skipping letter with an unlocatable profile", { letterId: letter.letter_id });
+      try {
+        await deps.releaseClaim(letter.letter_id, reason);
+      } catch (releaseError) {
+        deps.log?.("releasing claim failed", {
+          letterId: letter.letter_id,
+          error: String(releaseError),
+        });
+      }
+      continue;
+    }
+
+    try {
+      const computed = deps.schedule({
+        messageId: letter.letter_id,
+        writtenAt: new Date(letter.written_at).toISOString(),
+        sender: {
+          tz: letter.sender_tz,
+          lat: letter.sender_lat,
+          lng: letter.sender_lng,
+          countryCode: letter.sender_country_code,
+          region: letter.sender_region ?? undefined,
+          isTerritory: letter.sender_is_territory,
+        },
+        recipient: {
+          userId: letter.recipient_user_id,
+          // The live zone, not the frozen one. It reaches only carrierArrival
+          // and the guard that keeps delivery after collection; transit days
+          // come from the coordinates, regions and territory flags above, all
+          // still read from the envelope. Feeding the frozen zone here is what
+          // split a day's post into two arrivals when the recipient had moved.
+          tz: letter.recipient_live_tz ?? letter.recipient_tz,
+          lat: letter.recipient_lat,
+          lng: letter.recipient_lng,
+          countryCode: letter.recipient_country_code,
+          region: letter.recipient_region ?? undefined,
+          isTerritory: letter.recipient_is_territory,
+        },
+      });
+
+      results.push({
+        letterId: letter.letter_id,
+        // Passed through verbatim. mailclock emits ISO-8601 UTC instants and
+        // YYYY-MM-DD local dates; Postgres parses both into timestamptz/date
+        // without a client-side reformat, and reformatting is where time zones
+        // get lost.
+        collectedAt: computed.collectedAt,
+        postmarkDate: computed.postmarkDate,
+        transitDays: computed.transitDays,
+        deliveryDate: computed.deliveryDate,
+        deliverAt: computed.deliverAt,
+        // The zone the arrival instant was computed in. The database keeps it on
+        // the bundle so the choice stays auditable once the profile has moved.
+        recipientTz: letter.recipient_live_tz ?? letter.recipient_tz,
+        scheduleSource: "mailclock",
+      });
+    } catch (error) {
+      skipped++;
+      // The claim has to come back. A letter the engine refuses to schedule --
+      // a timezone it will not parse, say -- otherwise keeps its claim, is
+      // passed over by every later sweep, and nobody is told. Releasing it with
+      // the reason attached keeps it in the postbox, still revocable, and
+      // visible to whoever goes looking.
+      deps.log?.("scheduling failed", { letterId: letter.letter_id, error: String(error) });
+      try {
+        await deps.releaseClaim(letter.letter_id, String(error));
+      } catch (releaseError) {
+        deps.log?.("releasing claim failed", {
+          letterId: letter.letter_id,
+          error: String(releaseError),
+        });
+      }
+    }
+  }
+
+  if (results.length === 0) {
+    return { claimed: batch.length, applied: 0, rescheduled: 0, skipped };
+  }
+
+  const { applied, rescheduled } = await deps.applyResults(results);
+  return { claimed: batch.length, applied, rescheduled, skipped };
+}
