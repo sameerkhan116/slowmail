@@ -138,6 +138,7 @@ await psql(`
   update public.letters set
     state = 'in_transit', collected_at = now(), postmark_date = current_date, transit_days = 4,
     deliver_at = now() + interval '4 days',
+    delivery_date = ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date,
     sender_tz = 'America/New_York', sender_lat = 40.7128, sender_lng = -74.0060,
     sender_country_code = 'US', sender_is_territory = false,
     recipient_tz = 'America/Los_Angeles', recipient_lat = 34.0522, recipient_lng = -118.2437,

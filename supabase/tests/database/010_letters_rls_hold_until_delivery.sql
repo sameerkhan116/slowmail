@@ -37,7 +37,7 @@ insert into public.correspondents (requester_id, addressee_id, status) values
 -- In transit, three days out.
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at, delivery_date,
   sender_tz, sender_lat, sender_lng, sender_country_code, sender_is_territory,
   recipient_tz, recipient_lat, recipient_lng, recipient_country_code, schedule_source
 ) values (
@@ -47,7 +47,7 @@ insert into public.letters (
   'The rhododendrons finally took.',
   'in_transit',
   now() - interval '2 days', now() - interval '2 days', now() - interval '2 days',
-  (now() - interval '2 days')::date, 3, now() + interval '3 days',
+  (now() - interval '2 days')::date, 3, now() + interval '3 days', ((now() + interval '3 days') at time zone 'America/Los_Angeles')::date,
   'America/New_York', 40.6782, -73.9442, 'US', false,
   'America/Los_Angeles', 45.5152, -122.6784, 'US', 'test-fixture'
 );
@@ -181,7 +181,7 @@ reset role;
 
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at, delivery_date,
   recipient_tz, schedule_source
 ) values (
   '22222222-0000-4000-8000-00000000000a',
@@ -189,7 +189,7 @@ insert into public.letters (
   'b0000000-0000-4000-8000-000000000002',
   'One second early.', 'in_transit',
   now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
-  (now() - interval '1 day')::date, 1, now() + interval '1 second',
+  (now() - interval '1 day')::date, 1, now() + interval '1 second', ((now() + interval '1 second') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 ), (
   '22222222-0000-4000-8000-00000000000b',
@@ -197,7 +197,7 @@ insert into public.letters (
   'b0000000-0000-4000-8000-000000000002',
   'One second late.', 'in_transit',
   now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
-  (now() - interval '1 day')::date, 1, now() - interval '1 second',
+  (now() - interval '1 day')::date, 1, now() - interval '1 second', ((now() - interval '1 second') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 );
 

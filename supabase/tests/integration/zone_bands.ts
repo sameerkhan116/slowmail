@@ -153,3 +153,53 @@ Deno.test("a correctly shaped Puerto Rico profile is storable", async () => {
     rollback;`);
   if (code !== 0) throw new Error(`the supported shape was rejected:\n${out}`);
 });
+
+// The other direction of the same flag ---------------------------------------
+
+// Everything above checks a territory wrongly marked as one. The reverse costs
+// more: `is_territory` is client-writable, so an APO/FPO or Guam account holder
+// could clear it and pull a 7-day route down to a domestic band. The engine
+// cannot see the mistake -- an unflagged Guam profile is a well-formed distant
+// domestic address as far as it is concerned -- so only the database can refuse
+// it, and this pair of cases is the difference between "routed differently" and
+// "rejected".
+Deno.test("an unflagged territory routes short, which is why the database must refuse it", () => {
+  const flagged = band({ ...GUAM, region: "GU", isTerritory: true });
+  const unflagged = band({ ...GUAM, region: "GU", isTerritory: false });
+  assertEquals(flagged, 7);
+  if (unflagged >= flagged) {
+    throw new Error(
+      `clearing is_territory was expected to shorten the route; got ${unflagged} vs ${flagged}`,
+    );
+  }
+});
+
+for (const region of ["AA", "AE", "AP", "GU", "VI", "AS", "MP"]) {
+  Deno.test(`the database refuses a ${region} profile that is not marked a territory`, async () => {
+    const { out, code } = await psql(`
+      begin;
+      insert into auth.users (id) values ('9a000000-0000-4000-8000-0000000000b1');
+      insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng,
+                                   timezone, country_code, region, is_territory)
+      values ('9a000000-0000-4000-8000-0000000000b1', '${region}', 'Somewhere', 13.4443, 144.7937,
+              'Pacific/Guam', 'US', '${region}', false);
+      rollback;`);
+    if (code === 0) throw new Error(`expected the insert to be rejected, got:\n${out}`);
+    assertStringIncludes(out, "profiles_territories_are_flagged");
+  });
+}
+
+Deno.test("a territory profile cannot have the flag cleared after the fact", async () => {
+  const { out, code } = await psql(`
+    begin;
+    insert into auth.users (id) values ('9a000000-0000-4000-8000-0000000000b2');
+    insert into public.profiles (id, display_name, home_city_label, home_lat, home_lng,
+                                 timezone, country_code, region, is_territory)
+    values ('9a000000-0000-4000-8000-0000000000b2', 'GU', 'Hagatna', 13.4443, 144.7937,
+            'Pacific/Guam', 'US', 'GU', true);
+    update public.profiles set is_territory = false
+     where id = '9a000000-0000-4000-8000-0000000000b2';
+    rollback;`);
+  if (code === 0) throw new Error(`expected the update to be rejected, got:\n${out}`);
+  assertStringIncludes(out, "profiles_territories_are_flagged");
+});

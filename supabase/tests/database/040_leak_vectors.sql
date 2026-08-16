@@ -26,7 +26,7 @@ insert into public.correspondents (requester_id, addressee_id, status) values
 
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at, delivery_date,
   recipient_tz, schedule_source
 ) values (
   'f1111111-0000-4000-8000-00000000000a',
@@ -34,7 +34,7 @@ insert into public.letters (
   'b0000000-0000-4000-8000-000000000002',
   'Secret until Thursday.', 'in_transit',
   now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
-  (now() - interval '1 day')::date, 4, now() + interval '4 days',
+  (now() - interval '1 day')::date, 4, now() + interval '4 days', ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 );
 

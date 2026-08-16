@@ -35,6 +35,7 @@ function claimedLetter(overrides: Partial<ClaimedLetter> = {}): ClaimedLetter {
     sender_is_territory: false,
     recipient_user_id: "b0000000-0000-4000-8000-000000000002",
     recipient_tz: "America/Los_Angeles",
+    recipient_live_tz: "America/Los_Angeles",
     recipient_lat: 45.5152,
     recipient_lng: -122.6784,
     recipient_country_code: "US",
@@ -60,48 +61,115 @@ Deno.test("collection passes the letter id to the engine, so jitter stays determ
   assertEquals(seenMessageId, "11111111-0000-4000-8000-00000000000a");
 });
 
-Deno.test("collection routes from the frozen envelope and never restates it", async () => {
+Deno.test("every routing input reaches the engine, and only from the envelope", async () => {
+  // Asserting a couple of named fields is how a test stays green while the
+  // thing it is named after is broken: swapping the two coordinate pairs, or
+  // hardcoding both territory flags to false, moves mail to the wrong place
+  // without touching the fields anyone thought to check.
+  //
+  // So this compares the whole ScheduleInput at once. Every value below is a
+  // distinct sentinel, so no two fields can be exchanged without a mismatch,
+  // and the comparison is structural, so a field *added* to the contract later
+  // fails this test until someone decides what it should be. Same reasoning as
+  // the inverted freeze list: enumerate what is allowed, not what is forbidden.
+  let seen: unknown = null;
+
+  const letter = claimedLetter({
+    sender_tz: "America/New_York",
+    sender_lat: 11.11,
+    sender_lng: 22.22,
+    sender_country_code: "US",
+    sender_region: "NY",
+    sender_is_territory: true,
+    recipient_tz: "Europe/Lisbon",
+    recipient_live_tz: "Asia/Tokyo",
+    recipient_lat: 33.33,
+    recipient_lng: 44.44,
+    recipient_country_code: "PT",
+    recipient_region: "GU",
+    recipient_is_territory: false,
+  });
+
+  await runCollection({
+    claimBatch: () => Promise.resolve([letter]),
+    releaseClaim: () => Promise.resolve(),
+    applyResults: () => Promise.resolve({ applied: 1, rescheduled: 0 }),
+    schedule: ((input: Parameters<ScheduleFn>[0]) => {
+      seen = input;
+      return fixedSchedule(input);
+    }) as ScheduleFn,
+  });
+
+  assertEquals(seen, {
+    messageId: "11111111-0000-4000-8000-00000000000a",
+    writtenAt: "2026-08-17T14:02:00.000Z",
+    sender: {
+      tz: "America/New_York",
+      lat: 11.11,
+      lng: 22.22,
+      countryCode: "US",
+      region: "NY",
+      isTerritory: true,
+    },
+    recipient: {
+      userId: "b0000000-0000-4000-8000-000000000002",
+      // The live zone, not the frozen `recipient_tz` of "Europe/Lisbon". It is
+      // the only input allowed to come from outside the envelope, because it
+      // decides what time the carrier calls and not how far the letter travels.
+      tz: "Asia/Tokyo",
+      lat: 33.33,
+      lng: 44.44,
+      countryCode: "PT",
+      region: "GU",
+      isTerritory: false,
+    },
+  });
+});
+
+Deno.test("collection writes back the schedule and no part of the address", async () => {
   // The routing inputs are frozen onto the letter when it is posted, so the
   // worker's job is to route from what it was handed and write back only the
   // schedule. If it echoed the address back it would be a second writer for
   // columns that are supposed to have stopped moving at posting time.
   let applied: Record<string, unknown> | null = null;
-  let seen: Record<string, unknown> | null = null;
 
   await runCollection({
-    claimBatch: () => Promise.resolve([claimedLetter()]),
+    claimBatch: () => Promise.resolve([claimedLetter({ recipient_live_tz: "Asia/Tokyo" })]),
     releaseClaim: () => Promise.resolve(),
     applyResults: (results) => {
       applied = results[0] as Record<string, unknown>;
       return Promise.resolve({ applied: 1, rescheduled: 0 });
     },
-    schedule: ((input: Parameters<ScheduleFn>[0]) => {
-      seen = input as unknown as Record<string, unknown>;
-      return fixedSchedule(input);
-    }) as ScheduleFn,
+    schedule: fixedSchedule,
   });
 
   assertEquals(applied!.deliverAt, DELIVER);
   assertEquals(applied!.collectedAt, COLLECTED);
   assertEquals(applied!.postmarkDate, "2026-08-17");
+  // The date the day's bundle is keyed on has to travel with the schedule, or
+  // the database cannot tell which letters belong to the same arrival.
+  assertEquals(applied!.deliveryDate, "2026-08-20");
+  // And the zone the instant was computed in, so the choice stays auditable.
+  assertEquals(applied!.recipientTz, "Asia/Tokyo");
   // Nothing address-shaped goes back to the database.
   assertEquals(applied!.snapshot, undefined);
-
-  // The engine is fed the letter's own frozen values.
-  const sender = (seen!.sender as Record<string, unknown>);
-  const recipient = (seen!.recipient as Record<string, unknown>);
-  assertEquals(sender.tz, "America/New_York");
-  assertEquals(sender.region, "NY");
-  assertEquals(recipient.tz, "America/Los_Angeles");
-  assertEquals(recipient.region, "OR");
+  assertEquals(applied!.senderTz, undefined);
 });
 
-Deno.test("collection leaves an unlocatable letter alone rather than guessing", async () => {
+Deno.test("an unlocatable letter gives its claim back with a reason", async () => {
+  // Skipping silently was the bug: the claim stayed on the row, every later
+  // sweep passed it over, and nothing anywhere said so. "Nothing happened" is
+  // not the property worth asserting -- what matters is that the letter is
+  // back in a state a person can find and act on.
   let applyCalled = false;
+  const released: { id: string; reason: string }[] = [];
 
   const summary = await runCollection({
     claimBatch: () => Promise.resolve([claimedLetter({ recipient_lat: null, recipient_lng: null })]),
-    releaseClaim: () => Promise.resolve(),
+    releaseClaim: (id, reason) => {
+      released.push({ id, reason });
+      return Promise.resolve();
+    },
     applyResults: () => {
       applyCalled = true;
       return Promise.resolve({ applied: 0, rescheduled: 0 });
@@ -111,6 +179,9 @@ Deno.test("collection leaves an unlocatable letter alone rather than guessing", 
 
   assertEquals(applyCalled, false);
   assertEquals(summary, { claimed: 1, applied: 0, rescheduled: 0, skipped: 1 });
+  assertEquals(released.length, 1);
+  assertEquals(released[0].id, "11111111-0000-4000-8000-00000000000a");
+  assertStringIncludes(released[0].reason, "coordinates");
 });
 
 Deno.test("one letter failing to schedule does not sink the rest of the batch", async () => {

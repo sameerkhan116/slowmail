@@ -32,7 +32,7 @@ insert into public.letters (id, sender_id, recipient_id, body, state, written_at
 -- Already collected, three days out.
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at, delivery_date,
   recipient_tz, schedule_source
 ) values (
   'e2222222-0000-4000-8000-00000000000a',
@@ -40,7 +40,7 @@ insert into public.letters (
   'b0000000-0000-4000-8000-000000000002',
   'Gone for good.', 'in_transit',
   now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
-  (now() - interval '1 day')::date, 3, now() + interval '3 days',
+  (now() - interval '1 day')::date, 3, now() + interval '3 days', ((now() + interval '3 days') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 );
 

@@ -19,6 +19,10 @@ export type ClaimedLetter = {
   sender_is_territory: boolean;
   recipient_user_id: string;
   recipient_tz: string;
+  // The recipient's zone as it stands now, as opposed to the one frozen on the
+  // envelope. It decides only what time of day the carrier calls; every input
+  // that decides how long the post takes is read from the envelope.
+  recipient_live_tz: string;
   recipient_lat: number | null;
   recipient_lng: number | null;
   recipient_country_code: string;
@@ -47,14 +51,27 @@ export async function runCollection(
   let skipped = 0;
 
   for (const letter of batch) {
-    // A profile with no coordinates cannot be routed. Leaving it unapplied
-    // releases the claim on the next pass rather than guessing a destination.
+    // A profile with no coordinates cannot be routed. `post_letter` now refuses
+    // to create such a letter, so this is the pre-existing rows and nothing
+    // else -- but it still has to release the claim and say why. Skipping
+    // silently left the letter claimed, passed over by every later sweep once
+    // the reclaim window was the only thing freeing it, and invisible to
+    // anyone looking for stuck mail.
     if (
       letter.sender_lat === null || letter.sender_lng === null ||
       letter.recipient_lat === null || letter.recipient_lng === null
     ) {
       skipped++;
+      const reason = "unlocatable profile: a sender or recipient has no coordinates";
       deps.log?.("skipping letter with an unlocatable profile", { letterId: letter.letter_id });
+      try {
+        await deps.releaseClaim(letter.letter_id, reason);
+      } catch (releaseError) {
+        deps.log?.("releasing claim failed", {
+          letterId: letter.letter_id,
+          error: String(releaseError),
+        });
+      }
       continue;
     }
 
@@ -72,7 +89,12 @@ export async function runCollection(
         },
         recipient: {
           userId: letter.recipient_user_id,
-          tz: letter.recipient_tz,
+          // The live zone, not the frozen one. It reaches only carrierArrival
+          // and the guard that keeps delivery after collection; transit days
+          // come from the coordinates, regions and territory flags above, all
+          // still read from the envelope. Feeding the frozen zone here is what
+          // split a day's post into two arrivals when the recipient had moved.
+          tz: letter.recipient_live_tz ?? letter.recipient_tz,
           lat: letter.recipient_lat,
           lng: letter.recipient_lng,
           countryCode: letter.recipient_country_code,
@@ -90,7 +112,11 @@ export async function runCollection(
         collectedAt: computed.collectedAt,
         postmarkDate: computed.postmarkDate,
         transitDays: computed.transitDays,
+        deliveryDate: computed.deliveryDate,
         deliverAt: computed.deliverAt,
+        // The zone the arrival instant was computed in. The database keeps it on
+        // the bundle so the choice stays auditable once the profile has moved.
+        recipientTz: letter.recipient_live_tz ?? letter.recipient_tz,
         scheduleSource: "mailclock",
       });
     } catch (error) {

@@ -65,16 +65,20 @@ insert into public.correspondents (requester_id, addressee_id, status)
 insert into public.devices (user_id, apns_token) values ('${RECIPIENT}', repeat('cd', 32));
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, delivery_date, deliver_at,
   recipient_tz, schedule_source
 ) values
   ('${LETTER_A}', '${SENDER}', '${RECIPIENT}', 'One.', 'in_transit',
    now() - interval '3 days', now() - interval '3 days', now() - interval '3 days',
-   (now() - interval '3 days')::date, 3, now() - interval '1 minute',
+   (now() - interval '3 days')::date, 3,
+   ((now() - interval '1 minute') at time zone 'America/Los_Angeles')::date,
+   now() - interval '1 minute',
    'America/Los_Angeles', 'concurrency-fixture'),
   ('${LETTER_B}', '${SENDER}', '${RECIPIENT}', 'Two.', 'in_transit',
    now() - interval '3 days', now() - interval '3 days', now() - interval '3 days',
-   (now() - interval '3 days')::date, 3, now() - interval '1 minute',
+   (now() - interval '3 days')::date, 3,
+   ((now() - interval '1 minute') at time zone 'America/Los_Angeles')::date,
+   now() - interval '1 minute',
    'America/Los_Angeles', 'concurrency-fixture');
 SQL
 then

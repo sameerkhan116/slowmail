@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public, pg_catalog;
 
-select plan(20);
+select plan(27);
 
 -- Worker RPCs are called as service_role, the role the Edge Functions
 -- authenticate as over PostgREST. postgres owns these functions and can
@@ -93,6 +93,8 @@ select is(
        'postmarkDate', (now() + interval '2 days')::date::text,
        'transitDays', 2,
        'deliverAt', (now() + interval '4 days')::text,
+       'deliveryDate', ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date::text,
+       'recipientTz', 'America/Los_Angeles',
        'scheduleSource', 'test-fixture',
        'snapshot', '{}'::jsonb
      )
@@ -123,6 +125,8 @@ select is(
        'postmarkDate', (now() - interval '30 minutes')::date::text,
        'transitDays', 3,
        'deliverAt', (now() + interval '3 days')::text,
+       'deliveryDate', ((now() + interval '3 days') at time zone 'America/Los_Angeles')::date::text,
+       'recipientTz', 'America/Los_Angeles',
        'scheduleSource', 'test-fixture'
 )
    ))),
@@ -147,6 +151,8 @@ select is(
        'postmarkDate', (now() - interval '30 minutes')::date::text,
        'transitDays', 3,
        'deliverAt', (now() + interval '3 days')::text,
+       'deliveryDate', ((now() + interval '3 days') at time zone 'America/Los_Angeles')::date::text,
+       'recipientTz', 'America/Los_Angeles',
        'scheduleSource', 'test-fixture',
        'snapshot', '{}'::jsonb
      )
@@ -199,21 +205,21 @@ select is(
 -- recipient-local day.
 insert into public.letters (
   id, sender_id, recipient_id, body, state,
-  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at,
+  written_at, collect_at, collected_at, postmark_date, transit_days, deliver_at, delivery_date,
   recipient_tz, schedule_source
 ) values (
   '02222222-0000-4000-8000-00000000000a',
   'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002',
   'Due now.', 'in_transit',
   now() - interval '3 days', now() - interval '3 days', now() - interval '3 days',
-  (now() - interval '3 days')::date, 3, now() - interval '2 minutes',
+  (now() - interval '3 days')::date, 3, now() - interval '2 minutes', ((now() - interval '2 minutes') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 ), (
   '02222222-0000-4000-8000-00000000000b',
   'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002',
   'Also due now.', 'in_transit',
   now() - interval '3 days', now() - interval '3 days', now() - interval '3 days',
-  (now() - interval '3 days')::date, 3, now() - interval '2 minutes',
+  (now() - interval '3 days')::date, 3, now() - interval '2 minutes', ((now() - interval '2 minutes') at time zone 'America/Los_Angeles')::date,
   'America/Los_Angeles', 'test-fixture'
 );
 
@@ -266,6 +272,144 @@ select is(
   'a claimed notification is not handed to a second push worker'
 );
 reset role;
+
+
+-- One arrival per recipient per day ------------------------------------------
+
+-- mailclock seeds the carrier's minute offset on (userId, localDate) but turns
+-- it into an instant using the zone it is handed, so two letters that share a
+-- recipient and a delivery date land hours apart when the recipient moved
+-- between posting them. Each letter freezes the recipient's zone at posting, so
+-- the two envelopes genuinely disagree, and that is correct -- what must not
+-- happen is the day's post arriving twice.
+--
+-- The two payloads below deliberately carry *different* deliverAt values, which
+-- is exactly what the engine returns for the same date in two zones. A test that
+-- fed both letters the same instant would be checking arithmetic it had already
+-- done itself.
+insert into public.letters (
+  id, sender_id, recipient_id, body, state, written_at, collect_at,
+  sender_tz, sender_lat, sender_lng, sender_country_code, sender_region,
+  recipient_tz, recipient_lat, recipient_lng, recipient_country_code, recipient_region
+) values (
+  '0b222222-0000-4000-8000-00000000000a',
+  'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002',
+  'Posted from the old address.', 'awaiting_collection',
+  now() - interval '1 day', now() - interval '1 hour',
+  'America/New_York', 40.6782, -73.9442, 'US', 'NY',
+  'America/New_York', 40.7128, -74.0060, 'US', 'NY'
+), (
+  '0b222222-0000-4000-8000-00000000000b',
+  'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002',
+  'Posted after the move.', 'awaiting_collection',
+  now() - interval '1 day', now() - interval '1 hour',
+  'America/New_York', 40.6782, -73.9442, 'US', 'NY',
+  'America/Los_Angeles', 34.0522, -118.2437, 'US', 'CA'
+);
+
+set local role service_role;
+select is(
+  (select applied from public.apply_collection(jsonb_build_array(
+     jsonb_build_object(
+       'letterId', '0b222222-0000-4000-8000-00000000000a',
+       'collectedAt', (now() - interval '30 minutes')::text,
+       'postmarkDate', (now() - interval '30 minutes')::date::text,
+       'transitDays', 3,
+       'deliveryDate', '2026-11-01',
+       'deliverAt', '2026-11-01T15:16:00.000Z',
+       'recipientTz', 'America/New_York',
+       'scheduleSource', 'test-fixture'
+     ),
+     jsonb_build_object(
+       'letterId', '0b222222-0000-4000-8000-00000000000b',
+       'collectedAt', (now() - interval '30 minutes')::text,
+       'postmarkDate', (now() - interval '30 minutes')::date::text,
+       'transitDays', 3,
+       'deliveryDate', '2026-11-01',
+       'deliverAt', '2026-11-01T18:16:00.000Z',
+       'recipientTz', 'America/Los_Angeles',
+       'scheduleSource', 'test-fixture'
+     )
+   ))),
+  2,
+  'both letters for the same day are collected'
+);
+reset role;
+
+select is(
+  (select count(distinct deliver_at)::int from public.letters
+    where id in ('0b222222-0000-4000-8000-00000000000a', '0b222222-0000-4000-8000-00000000000b')),
+  1,
+  'two letters due the same day arrive at one instant, not two'
+);
+
+select is(
+  (select count(*)::int from slowmail.arrival_bundles
+    where recipient_id = 'b0000000-0000-4000-8000-000000000002'
+      and delivery_date = '2026-11-01'),
+  1,
+  'the day has exactly one arrival bundle'
+);
+
+-- The instant is one the engine actually produced, not an average or the row
+-- Postgres happened to return first.
+select is(
+  (select to_char(deliver_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+     from public.letters where id = '0b222222-0000-4000-8000-00000000000b'),
+  '2026-11-01T15:16:00.000Z',
+  'the bundle keeps the earliest candidate, so a retry in another order schedules the same day identically'
+);
+
+-- A letter collected later for a day already scheduled joins it rather than
+-- reopening the question. This is the case where a recipient moves *after* the
+-- bundle exists: the move takes effect on days not yet written.
+insert into public.letters (
+  id, sender_id, recipient_id, body, state, written_at, collect_at,
+  sender_tz, sender_lat, sender_lng, sender_country_code, sender_region,
+  recipient_tz, recipient_lat, recipient_lng, recipient_country_code, recipient_region
+) values (
+  '0b222222-0000-4000-8000-00000000000c',
+  'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002',
+  'Posted after the move too.', 'awaiting_collection',
+  now() - interval '1 day', now() - interval '1 hour',
+  'America/New_York', 40.6782, -73.9442, 'US', 'NY',
+  'Asia/Tokyo', 35.6762, 139.6503, 'JP', null
+);
+
+set local role service_role;
+select is(
+  (select applied from public.apply_collection(jsonb_build_array(
+     jsonb_build_object(
+       'letterId', '0b222222-0000-4000-8000-00000000000c',
+       'collectedAt', (now() - interval '20 minutes')::text,
+       'postmarkDate', (now() - interval '20 minutes')::date::text,
+       'transitDays', 3,
+       'deliveryDate', '2026-11-01',
+       'deliverAt', '2026-11-01T02:16:00.000Z',
+       'recipientTz', 'Asia/Tokyo',
+       'scheduleSource', 'test-fixture'
+     )
+   ))),
+  1,
+  'a later letter for the same day is collected'
+);
+reset role;
+
+select is(
+  (select to_char(deliver_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+     from public.letters where id = '0b222222-0000-4000-8000-00000000000c'),
+  '2026-11-01T15:16:00.000Z',
+  'a letter collected after the bundle exists joins it instead of retiming the day'
+);
+
+select is(
+  (select to_char(deliver_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+     from slowmail.arrival_bundles
+    where recipient_id = 'b0000000-0000-4000-8000-000000000002'
+      and delivery_date = '2026-11-01'),
+  '2026-11-01T15:16:00.000Z',
+  'and the bundle itself is unchanged, so a move cannot retime a day already scheduled'
+);
 
 select * from finish();
 rollback;

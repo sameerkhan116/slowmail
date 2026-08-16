@@ -96,11 +96,13 @@ try {
     -- them until it lands.
     insert into public.letters (
       id, sender_id, recipient_id, body, state, written_at, collect_at, collected_at,
-      postmark_date, transit_days, deliver_at, sender_tz, recipient_tz, schedule_source
+      postmark_date, transit_days, delivery_date, deliver_at, sender_tz, recipient_tz, schedule_source
     ) values (
       '${LETTER}', '${SENDER}', '${RECIPIENT}', 'Still in the air.', 'in_transit',
       now() - interval '2 days', now() - interval '2 days', now() - interval '2 days',
-      (now() - interval '2 days')::date, 4, now() + interval '4 days',
+      (now() - interval '2 days')::date, 4,
+      ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date,
+      now() + interval '4 days',
       'America/New_York', 'America/Los_Angeles', 'test-fixture'
     );
   `);

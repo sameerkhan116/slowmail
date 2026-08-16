@@ -66,7 +66,7 @@ supabase db reset          # applies all migrations from scratch
 ```
 
 ```sh
-supabase test db                                     # pgTAP: 97 assertions
+supabase test db                                     # pgTAP: 107 assertions
 ./supabase/tests/rls_failure_drill.sh                # the suite must be able to fail
 ./supabase/tests/concurrency/delivery_concurrency.sh # two overlapping backends
 
@@ -75,6 +75,8 @@ deno run -A $C supabase/tests/integration/schedule_roundtrip.ts    # engine inst
 deno run -A $C supabase/tests/integration/postgrest_count_leak.ts  # the HTTP layer, not SQL
 deno run -A $C supabase/tests/integration/reader_role_hardening.ts # the role the hold rests on
 deno run -A $C supabase/tests/integration/collection_cutoff_bound.ts
+deno run -A $C supabase/tests/integration/timezone_agreement.ts    # every accepted zone
+deno run -A $C supabase/tests/integration/timezone_legacy_repair.ts
 deno run -A $C supabase/tests/realtime/realtime_leak_probe.ts
 deno test -A $C supabase/tests/integration/zone_bands.ts           # far zone vs territory
 deno test -A $C supabase/functions/tests/                          # worker logic, no network
@@ -175,6 +177,119 @@ it is the deal you make by accepting, and it is what lets a client show where
 mail is coming from — but it is the one place where a social action hands over a
 location.
 
+## When the two runtimes disagree about a timezone
+
+Postgres resolves a timezone string against abbreviations *before* full zone
+names, so `at time zone 'CET'` is a fixed +01:00 all year. Luxon, which the
+engine uses, reads `CET` as a DST-observing zone. In European summer the SQL
+cutoff lands at 16:00Z and the engine's at 15:00Z, and in that hour the letter
+is still `awaiting_collection` — which is to say still revocable, an hour after
+five o'clock has passed. `EET`, `MET` and `WET` collide identically.
+
+`collection_cutoff_bound.ts` could not see it: 13 fixture cases in two zones
+sample the property rather than establish it. `timezone_agreement.ts` sweeps
+**every zone the profile constraint will accept** (554 today, 8800 probes) on
+each zone's own DST transition days and the days either side, and fails if SQL
+is ever later than the engine. It derives its zone list by attempting an insert
+of each zone into `profiles` inside a rolled-back transaction, so it cannot
+drift out of step with the constraint it is testing.
+
+The fix rejects the whole abbreviation namespace rather than the four names
+known to disagree today: every IANA region zone contains a `/`, so requiring one
+(plus `UTC`) rules out the class and does not rot as Postgres adds
+abbreviations. Existing rows are repaired first — all 45 slashless names have a
+canonical `Region/City` equivalent — so the CHECK on `profiles` goes on
+validated rather than `NOT VALID`. The four broken names map to zones matching
+*Luxon's* reading (`CET` → `Europe/Paris`), which is the side that was already
+authoritative, so the repair corrects SQL rather than moving anyone's mail.
+`letters.sender_tz` is repaired and `collect_at` recomputed for uncollected
+letters only; a collected letter's envelope is frozen and stays that way.
+
+## One arrival per recipient per day
+
+`carrierArrival` seeds the carrier's minute offset on `(userId, localDate)` — so
+that, as its docstring says, every letter due that day arrives together — but it
+turns that offset into an instant using the timezone it is handed. Same user,
+same `2026-11-01`: `America/New_York` 18:52Z, `America/Los_Angeles` 21:52Z,
+`Europe/London` 13:52Z. Each letter freezes the recipient's zone at posting, so
+two letters posted either side of a move genuinely disagree, share a delivery
+date, and land hours apart. The post comes, and then more post comes; and
+`run_delivery` folds both into one outbox row, so the second may arrive with no
+push at all.
+
+`slowmail.arrival_bundles` makes the instant a fact about the day rather than
+about the letter: one row per `(recipient_id, delivery_date)`, written once by
+whichever letter is collected first, and every letter for that date takes its
+`deliver_at` from it.
+
+Two decisions worth stating, because both could reasonably go the other way:
+
+- **The recipient's live profile zone computes the bundle**, not the letter's
+  snapshot. *How long the post takes* was settled at posting and stays frozen on
+  the envelope — coordinates, regions, territory flags and country codes are all
+  still read from the snapshot. *What time the carrier calls* is a fact about
+  where the recipient is standing. Scheduling from the first-collected letter's
+  snapshot would serve someone who has moved to Los Angeles at New York times,
+  06:52 local, which is not a time any carrier calls. The bound on what a
+  recipient can move by changing zone is 26 hours (UTC-12 to UTC+14), it always
+  stays within 09:00–17:00 on the delivery date *in the zone chosen*, and it
+  cannot reach earlier than that date in the recipient's own frame — so it is
+  not a hold violation. It is also blind: a recipient cannot see undelivered
+  mail, so cannot know whether there is a bundle to move.
+- **A bundle already written is never recomputed.** Moving after it exists takes
+  effect on days not yet scheduled. Recomputing would either drag mail forward
+  (a hold violation) or push back a letter that may already have landed.
+
+One exception, and it is deliberate: a far-eastward bundle can produce an
+instant *before* a given letter's own `collected_at` — bundle zone UTC+14 gives
+`delivery_date-1 19:00Z`, while a sender in UTC-11 collects at `postmark+1
+04:00Z`. In that case the letter keeps its own engine-computed `deliverAt` and
+is marked `+unbundled`. Mail that cannot arrive before it was posted outranks
+mail that arrives together.
+
+No change to `packages/mailclock` was needed. Its `carrierArrival` docstring
+overpromises, though: it can only make good on "every letter due that day
+arrives together" for a fixed timezone, and the obligation to pass a consistent
+one per bundle belongs to the caller.
+
+## Routing inputs that cannot route
+
+Two shapes of profile produced a letter that no worker could ever deliver.
+
+`is_territory` is client-writable and nothing derived it from `region`, so an
+account holder could hold `region = 'AE'` with `is_territory = false` and pull a
+7-day route down to a one-day band. `profiles_territories_are_flagged` requires
+the flag for `AA/AE/AP/GU/VI/AS/MP`. Puerto Rico is deliberately *excluded* from
+that list and from the flag: the spec puts PR in the 5-day band with AK and HI,
+and `zones.ts` checks `isTerritory` before region, so a flagged PR profile
+routes at 7. PR is `region = 'PR', is_territory = false`, and the constraint
+either side of that is what keeps it so.
+
+`post_letter` snapshots the routing inputs, and a profile with no coordinates
+snapshots nulls. Collection then cannot route the letter, and completing the
+profile later cannot repair it, because repairing a frozen envelope is exactly
+the recomputation the snapshot exists to prevent. `post_letter` now refuses the
+post with `SM008` — the last moment at which the profile is still the source of
+truth and the sender is still there to be told. The letter stays a draft they
+can fix.
+
+The worker's own guard was half-built: it skipped an unroutable letter without
+releasing the claim, so the row was retried every 15 minutes forever and nothing
+reported it. It now releases the claim and records the reason.
+
+## Asserting the whole contract, not two fields of it
+
+The worker test that checks what the collection job hands the engine used to
+compare the two timezones and the two regions. Swapping the sender and recipient
+coordinate pairs inside `claim_collection_batch`, or hardcoding both territory
+flags to `false`, left it green — and both of those are wrong routes, not wrong
+formatting. It now captures the entire `ScheduleInput` and compares it field by
+field against distinct per-field sentinels, so a field added to the engine's
+contract fails the test until somebody asserts it.
+
+That is the same fail-open shape as the freeze trigger's original allowlist, and
+it is fixed the same way: enumerate what must be true rather than what must not.
+
 ## Proving the new tests can fail
 
 Each fix was reverted against a live stack and the matching test required to go
@@ -188,6 +303,13 @@ red:
 | push drain limited to a single batch | red: the drain stopped before the outbox was empty |
 | the whole `slowmail_reader` normalisation block removed | 3/8 red in `reader_role_hardening`, including the behavioural one: *the recipient is back to seeing 1 letters* |
 | `correspondent_card` status filter removed | 2 red in `040_leak_vectors`: `declined` and `blocked` edges both returned the card |
+| the `/`-requiring timezone predicate removed | red in `timezone_agreement`: *the SQL cutoff runs LATE in 4 zones (56 probes)* — `CET`, `EET`, `MET`, `WET`, 60 minutes each, out of 598 swept |
+| `apply_collection` reverted to each letter's own `deliver_at` | 3 red in `050_postal_jobs`, including *two letters due the same day arrive at one instant, not two* |
+| `drop constraint profiles_territories_are_flagged` | 8 red in `zone_bands`: all seven territory regions stored unflagged, and the flag cleared by a later `UPDATE` |
+| `post_letter`'s coordinate checks removed | 3 red in `020_letters_write_surface` — including the behavioural one, *the refused letter is still a draft*, which went red because the letter reached `awaiting_collection` with null coordinates |
+| `recipient_live_tz` swapped back to the frozen `recipient_tz` | 1 red in `workers_test` |
+| sender and recipient coordinates swapped in the engine call | 1 red in `workers_test` — the previous two-field assertion stayed green through this |
+| both territory flags hardcoded `false` in the engine call | 1 red in `workers_test` — likewise |
 
 The second of those is worth reading twice. The suite was green under the
 live-profile mutation until a test was added at the level where the bug can

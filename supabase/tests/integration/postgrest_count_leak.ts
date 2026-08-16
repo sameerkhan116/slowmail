@@ -116,24 +116,28 @@ await psql(`
   -- ${DELIVERED} letters the recipient may legitimately see.
   insert into public.letters (
     sender_id, recipient_id, body, state, written_at, collect_at, collected_at,
-    postmark_date, transit_days, deliver_at, delivered_at,
+    postmark_date, transit_days, delivery_date, deliver_at, delivered_at,
     sender_tz, recipient_tz, schedule_source
   )
   select '${SENDER}', '${RECIPIENT}', 'Delivered ' || g, 'delivered',
          now() - interval '40 days', now() - interval '40 days', now() - interval '40 days',
-         (now() - interval '40 days')::date, 3, now() - interval '30 days', now() - interval '30 days',
+         (now() - interval '40 days')::date, 3,
+         ((now() - interval '30 days') at time zone 'America/Los_Angeles')::date,
+         now() - interval '30 days', now() - interval '30 days',
          'America/New_York', 'America/Los_Angeles', 'count-fixture'
   from generate_series(1, ${DELIVERED}) g;
 
   -- ${IN_FLIGHT} letter that must not be knowable in any form.
   insert into public.letters (
     sender_id, recipient_id, body, state, written_at, collect_at, collected_at,
-    postmark_date, transit_days, deliver_at,
+    postmark_date, transit_days, delivery_date, deliver_at,
     sender_tz, recipient_tz, schedule_source
   )
   select '${SENDER}', '${RECIPIENT}', 'Still in the air ' || g, 'in_transit',
          now() - interval '1 day', now() - interval '1 day', now() - interval '1 day',
-         (now() - interval '1 day')::date, 4, now() + interval '4 days',
+         (now() - interval '1 day')::date, 4,
+         ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date,
+         now() + interval '4 days',
          'America/New_York', 'America/Los_Angeles', 'count-fixture'
   from generate_series(1, ${IN_FLIGHT}) g;
 
@@ -141,12 +145,14 @@ await psql(`
   -- distinguishable from a recipient-scoped one.
   insert into public.letters (
     sender_id, recipient_id, body, state, written_at, collect_at, collected_at,
-    postmark_date, transit_days, deliver_at, delivered_at,
+    postmark_date, transit_days, delivery_date, deliver_at, delivered_at,
     sender_tz, recipient_tz, schedule_source
   )
   select '${SENDER}', '${THIRD}', 'Third party ' || g, 'delivered',
          now() - interval '40 days', now() - interval '40 days', now() - interval '40 days',
-         (now() - interval '40 days')::date, 3, now() - interval '30 days', now() - interval '30 days',
+         (now() - interval '40 days')::date, 3,
+         ((now() - interval '30 days') at time zone 'America/Los_Angeles')::date,
+         now() - interval '30 days', now() - interval '30 days',
          'America/New_York', 'America/Chicago', 'count-fixture'
   from generate_series(1, ${THIRD_PARTY_LETTERS}) g;
 
@@ -225,11 +231,13 @@ const HIDDEN = 40;
 await psql(`
   insert into public.letters (
     sender_id, recipient_id, body, state, written_at, collect_at, collected_at,
-    postmark_date, transit_days, deliver_at, sender_tz, recipient_tz, schedule_source
+    postmark_date, transit_days, delivery_date, deliver_at, sender_tz, recipient_tz, schedule_source
   )
   select '${SENDER}', '${RECIPIENT}', 'Hidden ' || g, 'in_transit',
          now() - interval '2 days', now() - interval '2 days', now() - interval '2 days',
-         current_date - 2, 4, now() + interval '4 days',
+         current_date - 2, 4,
+         ((now() + interval '4 days') at time zone 'America/Los_Angeles')::date,
+         now() + interval '4 days',
          'America/New_York', 'America/Los_Angeles', 'count-fixture'
   from generate_series(1, ${HIDDEN}) g;
   analyze public.letters;
