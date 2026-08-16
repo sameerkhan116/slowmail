@@ -117,7 +117,7 @@ struct WritingTests {
     @Test("A posted letter waits for the next collection")
     func postedLetterAwaitsCollection() async throws {
         let post = store()
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
         #expect(letter.state == .awaitingCollection)
         #expect(letter.collectedAt == nil)
         #expect(letter.isRevocable(asOf: thursdayAfternoon))
@@ -125,7 +125,7 @@ struct WritingTests {
 
     @Test("Written before five, collected the same day")
     func sameDayCollection() async throws {
-        let letter = try await store().write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let letter = try await store().write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
         let postmark = try #require(letter.postmarkDate)
         #expect(Calendar.postal.isDate(postmark, inSameDayAs: thursdayAfternoon))
         #expect(Calendar.postal.component(.hour, from: postmark) == 17)
@@ -135,7 +135,7 @@ struct WritingTests {
     func nextDayCollection() async throws {
         let evening = try #require(
             Calendar.postal.date(bySettingHour: 18, minute: 30, second: 0, of: thursdayAfternoon))
-        let letter = try await store(at: evening).write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let letter = try await store(at: evening).write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
         let postmark = try #require(letter.postmarkDate)
         let friday = try #require(Calendar.postal.date(byAdding: .day, value: 1, to: thursdayAfternoon))
         #expect(Calendar.postal.isDate(postmark, inSameDayAs: friday))
@@ -145,7 +145,7 @@ struct WritingTests {
     func emptyBodyRefused() async throws {
         let post = store()
         await #expect(throws: MailStoreError.emptyBody) {
-            try await post.write(Draft(correspondentID: "c-amara", body: "   \n  "))
+            try await post.write(Draft(correspondentID: "c-amara", body: "   \n  ", clientKey: UUID()))
         }
     }
 
@@ -153,7 +153,7 @@ struct WritingTests {
     func unknownRecipientRefused() async throws {
         let post = store()
         await #expect(throws: MailStoreError.unknownCorrespondent("c-nobody")) {
-            try await post.write(Draft(correspondentID: "c-nobody", body: "Hello."))
+            try await post.write(Draft(correspondentID: "c-nobody", body: "Hello.", clientKey: UUID()))
         }
     }
 
@@ -322,7 +322,7 @@ struct CollectionAdvancesTests {
         // strict or not, which is the whole question.
         let clock = SimulatedClock(now: thursdayAfternoon)
         let post = MockMailStore(clock: clock)
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
         let collection = try #require(letter.postmarkDate)
 
         clock.set(collection.addingTimeInterval(-1))
@@ -331,7 +331,7 @@ struct CollectionAdvancesTests {
 
         let clock2 = SimulatedClock(now: thursdayAfternoon)
         let post2 = MockMailStore(clock: clock2)
-        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let l2 = try await post2.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
         clock2.set(try #require(l2.postmarkDate))
         #expect(!l2.isRevocable(asOf: clock2.now), "at five it has gone")
         await #expect(throws: MailStoreError.alreadyCollected) {
@@ -343,7 +343,7 @@ struct CollectionAdvancesTests {
     func stateAdvancesAtCollection() async throws {
         let clock = SimulatedClock(now: thursdayAfternoon)
         let post = MockMailStore(clock: clock)
-        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello."))
+        let letter = try await post.write(Draft(correspondentID: "c-amara", body: "Hello.", clientKey: UUID()))
 
         let before = try #require(try await post.outbox().first { $0.id == letter.id })
         #expect(before.state == .awaitingCollection)
@@ -362,7 +362,7 @@ struct InternationalTransitTests {
 
     @Test("A fourteen-day letter to Kyoto does not gain two Sundays")
     func internationalUsesCalendarDays() async throws {
-        let letter = try await store().write(Draft(correspondentID: "c-kenji", body: "Hello."))
+        let letter = try await store().write(Draft(correspondentID: "c-kenji", body: "Hello.", clientKey: UUID()))
         let postmark = try #require(letter.postmarkDate)
         let expected = try #require(letter.expectedDeliveryDate)
         let days = try #require(
@@ -393,7 +393,7 @@ struct InternationalTransitTests {
     func domesticUsesPostalDays() async throws {
         // Austin is four postal days from New York. Collected Thursday the 20th:
         // Fri 21, Sat 22, Sunday skipped, Mon 24, Tue 25.
-        let letter = try await store().write(Draft(correspondentID: "c-ben", body: "Hello."))
+        let letter = try await store().write(Draft(correspondentID: "c-ben", body: "Hello.", clientKey: UUID()))
         let expected = try #require(letter.expectedDeliveryDate)
         var c = DateComponents()
         c.year = 2026; c.month = 8; c.day = 25
@@ -905,5 +905,99 @@ struct DraftLedgerTests {
         ledger.openComposer()
         ledger.setBody("   \n ", for: "c-ben")
         #expect(!ledger.canPost("c-ben"))
+    }
+}
+
+@Suite("Posting the same letter twice")
+struct RetrySafety {
+    /// The case the key exists for. A post can commit on the server and lose
+    /// its reply; from here that is indistinguishable from never arriving, so
+    /// the sender taps again.
+    @Test("A retry after a failure carries the key the first attempt used")
+    func retryKeepsKey() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Are you there?", for: "them")
+
+        let first = ledger.postingKey(for: "them")
+        // Nothing is recorded as posted: the attempt failed.
+        let retry = ledger.postingKey(for: "them")
+
+        #expect(first == retry)
+    }
+
+    /// The other half. A key that never retired would make the second letter to
+    /// someone silently return the first — the same words to the same person is
+    /// an ordinary thing to write twice.
+    @Test("The next letter after a successful post is a new letter")
+    func postRetiresKey() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Thinking of you", for: "them")
+        let first = ledger.postingKey(for: "them")
+
+        ledger.completePost(of: "Thinking of you", to: "them", sentUnder: ledger.currentGeneration)
+
+        ledger.setBody("Thinking of you", for: "them")
+        #expect(ledger.postingKey(for: "them") != first)
+    }
+
+    /// A sender who dismissed the sheet mid-flight is the case an
+    /// only-on-success retirement would miss.
+    @Test("A post that lands after the sheet closed still retires its key")
+    func staleGenerationRetiresKey() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        ledger.setBody("Bye", for: "them")
+        let first = ledger.postingKey(for: "them")
+        let sent = ledger.currentGeneration
+
+        ledger.openComposer()  // The sender reopened the composer mid-flight.
+        ledger.completePost(of: "Bye", to: "them", sentUnder: sent)
+
+        #expect(ledger.postingKey(for: "them") != first)
+    }
+
+    /// Two people being written to at once are two letters.
+    @Test("Each correspondent gets their own key")
+    func keysArePerCorrespondent() {
+        var ledger = DraftLedger()
+        ledger.openComposer()
+        #expect(ledger.postingKey(for: "them") != ledger.postingKey(for: "other"))
+    }
+
+    /// The mock has to refuse the duplicate too, or the app is developed
+    /// against a post office more forgiving than the one it ships against.
+    @Test("Reposting a key returns the letter already posted, not a second")
+    func mockIsIdempotent() async throws {
+        let store = store()
+        let person = try #require(await store.correspondents().first)
+        let key = UUID()
+
+        let first = try await store.write(
+            Draft(correspondentID: person.id, body: "Only once", clientKey: key))
+        let retry = try await store.write(
+            Draft(correspondentID: person.id, body: "Only once", clientKey: key))
+
+        #expect(first.id == retry.id)
+        // Counted rather than compared: a store that inserted a second letter
+        // and returned the first would satisfy the line above.
+        let mine = try await store.outbox().filter { $0.body == "Only once" }
+        #expect(mine.count == 1)
+    }
+
+    @Test("A different key is a different letter even with identical words")
+    func mockDistinguishesKeys() async throws {
+        let store = store()
+        let person = try #require(await store.correspondents().first)
+
+        let first = try await store.write(
+            Draft(correspondentID: person.id, body: "Only once", clientKey: UUID()))
+        let second = try await store.write(
+            Draft(correspondentID: person.id, body: "Only once", clientKey: UUID()))
+
+        #expect(first.id != second.id)
+        let mine = try await store.outbox().filter { $0.body == "Only once" }
+        #expect(mine.count == 2)
     }
 }

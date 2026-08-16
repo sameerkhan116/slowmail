@@ -10,6 +10,7 @@ public actor MockMailStore: MailStore {
     private var people: [Correspondent]
     private let clock: any Clock
     private let userID: String
+    private var postedKeys: [UUID: LetterID] = [:]
 
     public init(clock: any Clock, fixtures: Fixtures = .demo, userID: String = Fixtures.userID) {
         self.clock = clock
@@ -78,6 +79,14 @@ public actor MockMailStore: MailStore {
             throw MailStoreError.unknownCorrespondent(draft.correspondentID)
         }
 
+        // Mirrors the server's idempotency. Without it the mock would accept a
+        // retry as a second letter, and the app would be built against a post
+        // office more forgiving than the one it ships against.
+        if let already = postedKeys[draft.clientKey],
+           let existing = letters.first(where: { $0.id == already }) {
+            return collected(existing)
+        }
+
         let person = try await correspondent(draft.correspondentID)
         // The post office refuses a letter it cannot route, and the mock has to
         // refuse it too or the app would look posted here and fail against the
@@ -96,6 +105,7 @@ public actor MockMailStore: MailStore {
             expectedDeliveryDate: PostalCalendar.arrival(after: postmark, transit: transit)
         )
         letters.append(letter)
+        postedKeys[draft.clientKey] = letter.id
         return letter
     }
 

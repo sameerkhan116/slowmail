@@ -116,9 +116,21 @@ public struct Draft: Sendable, Hashable {
     public let correspondentID: CorrespondentID
     public let body: String
 
-    public init(correspondentID: CorrespondentID, body: String) {
+    /// Chosen before the first attempt to post and kept across retries.
+    ///
+    /// A post that commits on the server and then loses its reply is
+    /// indistinguishable, from here, from one that never arrived. The client
+    /// has to be free to try again, so the retry carries the same key and the
+    /// server returns the letter it already posted instead of posting a second.
+    ///
+    /// No default value: one would make "forgot to keep this stable" compile,
+    /// and the resulting duplicate is unrecallable once collected.
+    public let clientKey: UUID
+
+    public init(correspondentID: CorrespondentID, body: String, clientKey: UUID) {
         self.correspondentID = correspondentID
         self.body = body
+        self.clientKey = clientKey
     }
 }
 

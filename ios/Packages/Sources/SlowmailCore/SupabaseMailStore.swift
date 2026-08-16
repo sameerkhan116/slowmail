@@ -188,7 +188,14 @@ public actor SupabaseMailStore: MailStore {
         // neither can be recalled once collected.
         let row: LetterRow = try await decode(await rpc(
             "write_letter",
-            ["p_recipient_id": draft.correspondentID, "p_body": body]))
+            [
+                "p_recipient_id": draft.correspondentID,
+                "p_body": body,
+                // Sent so that the retry this comment describes is safe: the
+                // server answers a repeated key with the letter it already
+                // posted rather than posting another.
+                "p_client_key": draft.clientKey.uuidString,
+            ]))
         return try row.letter(viewedBy: me)
     }
 

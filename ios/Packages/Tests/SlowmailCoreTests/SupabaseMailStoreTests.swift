@@ -93,7 +93,7 @@ struct SupabaseTransportTests {
         let transport = RecordingTransport()
         let store = makeStore(transport)
         _ = try await store.mailbox()
-        _ = try? await store.write(Draft(correspondentID: "them-uuid", body: "Hi"))
+        _ = try? await store.write(Draft(correspondentID: "them-uuid", body: "Hi", clientKey: UUID()))
         try? await store.markRead("l-1")
 
         for header in await transport.headers {
@@ -250,7 +250,7 @@ struct SupabaseErrorTests {
         let transport = RecordingTransport()
         let store = makeStore(transport)
         await #expect(throws: MailStoreError.emptyBody) {
-            _ = try await store.write(Draft(correspondentID: "them-uuid", body: "   \n "))
+            _ = try await store.write(Draft(correspondentID: "them-uuid", body: "   \n ", clientKey: UUID()))
         }
         #expect(await transport.requests.isEmpty)
     }
@@ -470,7 +470,7 @@ struct MockRefusesUnroutableTests {
             fixtures: Fixtures(correspondents: [nowhere], letters: []))
 
         await #expect(throws: MailStoreError.noRoutableAddress) {
-            _ = try await store.write(Draft(correspondentID: "nowhere", body: "Hello"))
+            _ = try await store.write(Draft(correspondentID: "nowhere", body: "Hello", clientKey: UUID()))
         }
         // And nothing was filed away as though it had been posted.
         #expect(try await store.outbox().isEmpty)
@@ -694,7 +694,7 @@ struct SupabaseWriteTests {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
         let letter = try await makeStore(transport)
-            .write(Draft(correspondentID: "them-uuid", body: "Hello"))
+            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: UUID()))
 
         // Decoding this as an array threw .malformedResponse while the letter
         // was already inserted and posted — so the sender was told it failed
@@ -712,15 +712,24 @@ struct SupabaseWriteTests {
     func argumentNamesAreRight() async throws {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
+        let key = UUID()
         _ = try await makeStore(transport)
-            .write(Draft(correspondentID: "them-uuid", body: "  Hello  "))
+            .write(Draft(correspondentID: "them-uuid", body: "  Hello  ", clientKey: key))
 
         let sent = try #require(await transport.requests.first?.httpBody)
         let arguments = try #require(
             try JSONSerialization.jsonObject(with: sent) as? [String: String])
         // A wrong name is not a type error anywhere in Swift; PostgREST answers
         // 404 "function not found", which reads like an outage.
-        #expect(arguments == ["p_recipient_id": "them-uuid", "p_body": "Hello"])
+        //
+        // The key is compared against the draft's own rather than merely being
+        // present, because a store that minted a fresh one per attempt would
+        // satisfy "p_client_key is sent" and still post twice on a retry.
+        #expect(arguments == [
+            "p_recipient_id": "them-uuid",
+            "p_body": "Hello",
+            "p_client_key": key.uuidString,
+        ])
     }
 
     @Test("Each single-argument RPC names its argument correctly")
@@ -742,7 +751,7 @@ struct SupabaseWriteTests {
         let transport = RecordingTransport()
         await transport.reply(to: "write_letter", body: writtenRow)
         let letter = try await makeStore(transport)
-            .write(Draft(correspondentID: "them-uuid", body: "Hello"))
+            .write(Draft(correspondentID: "them-uuid", body: "Hello", clientKey: UUID()))
         #expect(letter.collectedAt == nil)
         #expect(letter.deliveredAt == nil)
         #expect(letter.readAt == nil)

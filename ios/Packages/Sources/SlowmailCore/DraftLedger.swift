@@ -16,6 +16,7 @@ import Foundation
 public struct DraftLedger: Equatable, Sendable {
     private var bodies: [CorrespondentID: String] = [:]
     private var posted: [CorrespondentID: String] = [:]
+    private var keys: [CorrespondentID: UUID] = [:]
     private var generation = 0
 
     public init() {}
@@ -50,6 +51,19 @@ public struct DraftLedger: Equatable, Sendable {
             && !isAlreadyPosted(id)
     }
 
+    /// The key identifying the letter currently being written to `id`.
+    ///
+    /// Stable while that letter is unsent, however many times posting is
+    /// retried, because a retry is the same letter. Cleared once one has
+    /// actually landed, so the next letter to the same person is a new letter
+    /// even if it happens to say the same words.
+    public mutating func postingKey(for id: CorrespondentID) -> UUID {
+        if let existing = keys[id] { return existing }
+        let fresh = UUID()
+        keys[id] = fresh
+        return fresh
+    }
+
     /// Records that `body` was accepted by the post office. Returns whether the
     /// composer that sent it is still the one on screen, and so whether the
     /// sheet should close.
@@ -59,6 +73,11 @@ public struct DraftLedger: Equatable, Sendable {
         to id: CorrespondentID,
         sentUnder sentGeneration: Int
     ) -> Bool {
+        // The letter landed either way, so the key that posted it is spent in
+        // both branches. Retiring it only when the sheet is still open would
+        // leave a sender who walked away reusing it, and the server would
+        // answer their next letter with the previous one.
+        keys[id] = nil
         guard sentGeneration == generation else {
             posted[id] = body
             return false

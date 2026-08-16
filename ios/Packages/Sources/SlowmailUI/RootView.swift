@@ -95,10 +95,17 @@ public struct RootView: View {
         let body = drafts.body(for: person.id)
         guard drafts.canPost(person.id) else { return }
         let sent = drafts.currentGeneration
+        // Taken before the attempt and left alone on failure, so a sender who
+        // taps again after a timeout posts the same letter rather than a second.
+        let draft = Draft(
+            correspondentID: person.id,
+            body: body,
+            clientKey: drafts.postingKey(for: person.id)
+        )
         isPosting = true
         Task {
             defer { isPosting = false }
-            guard await model.post(Draft(correspondentID: person.id, body: body)) != nil else {
+            guard await model.post(draft) != nil else {
                 return  // On failure the draft is left exactly where it was.
             }
             // The composer can be dismissed and reopened while the post is in
