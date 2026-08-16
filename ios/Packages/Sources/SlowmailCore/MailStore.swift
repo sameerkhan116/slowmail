@@ -21,5 +21,17 @@ public protocol MailStore: Sendable {
     func markRead(_ id: LetterID) async throws
 
     /// When today's post is expected to land, if anything is still coming.
+    ///
+    /// An estimate, and deliberately only that. Client and server draw the same
+    /// round from the same seed, but they resolve the recipient's local time
+    /// against their own copy of the timezone database. Those copies disagree —
+    /// Swift ships 2026c, Node's ICU is older, and for a zone whose rules
+    /// changed between them the same wall-clock round is up to an hour apart as
+    /// an absolute instant.
+    ///
+    /// So a client may believe the round is over while the server is still
+    /// holding a letter back. `mailbox()` is the only authority on what has
+    /// landed; nothing shown to the recipient may claim that the day is
+    /// finished, only that the carrier is not expected again.
     func carrierExpected(on day: Date) async throws -> Date?
 }

@@ -26,12 +26,12 @@ enum Hashing {
     }
 
     /// A fraction in [0, 1), over the full 32-bit range.
-    static func unitInterval(_ namespace: String, _ parts: String...) -> Double {
+    static func unitInterval(_ namespace: String, _ parts: [String]) -> Double {
         Double(seeded(namespace, parts)) / 4_294_967_296.0
     }
 
     /// Uniform integer in [min, max], inclusive at both ends.
-    static func intInRange(_ min: Int, _ max: Int, _ namespace: String, _ parts: String...) -> Int {
+    static func intInRange(_ min: Int, _ max: Int, _ namespace: String, _ parts: [String]) -> Int {
         precondition(max >= min, "empty range")
         let span = UInt32(max - min + 1)
         return min + Int(seeded(namespace, parts) % span)

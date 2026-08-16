@@ -4,6 +4,10 @@ import Foundation
 /// whole app can be driven, tested, and screenshotted without waiting for days
 /// to pass.
 public struct Fixtures: Sendable {
+    /// Who the demo is "you". Shared with MockMailStore so the fixture rounds
+    /// and the store's carrier time are drawn from the same seed.
+    public static let userID = "me"
+
     public let correspondents: [Correspondent]
     public let letters: [Letter]
 
@@ -24,6 +28,13 @@ public struct Fixtures: Sendable {
         components.timeZone = TimeZone(identifier: "America/New_York")
         return Calendar(identifier: .gregorian).date(from: components) ?? Date(timeIntervalSince1970: 1_787_000_000)
     }()
+
+    /// The moment the carrier reached this user on a given day. Typing a plausible
+    /// time here instead would contradict the round the app itself computes, and
+    /// the mailbox would show mail arriving after the carrier had already been.
+    private static func round(_ day: Int) -> Date {
+        PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: at(day, 12)) ?? at(day, 12)
+    }
 
     private static func at(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
         var components = DateComponents()
@@ -61,7 +72,7 @@ public struct Fixtures: Sendable {
                   """,
                   state: .delivered, writtenAt: at(15, 11), collectedAt: at(15, 17),
                   postmarkDate: at(15, 17), expectedDeliveryDate: at(20, 13),
-                  deliveredAt: at(20, 13, 27)),
+                  deliveredAt: round(20)),
 
             .init(id: "l-002", correspondentID: "c-nour", isOutbound: false,
                   body: """
@@ -72,20 +83,20 @@ public struct Fixtures: Sendable {
                   """,
                   state: .delivered, writtenAt: at(10, 9), collectedAt: at(10, 17),
                   postmarkDate: at(10, 17), expectedDeliveryDate: at(20, 13),
-                  deliveredAt: at(20, 13, 27)),
+                  deliveredAt: round(20)),
 
             // Read a few days ago; gives Correspondence something to show.
             .init(id: "l-003", correspondentID: "c-ben", isOutbound: false,
                   body: "Short one — the car died outside Waco and I have opinions about it now.",
                   state: .delivered, writtenAt: at(5, 10), collectedAt: at(5, 17),
                   postmarkDate: at(5, 17), expectedDeliveryDate: at(10, 12),
-                  deliveredAt: at(10, 12, 14), readAt: at(10, 19)),
+                  deliveredAt: round(10), readAt: at(10, 19)),
 
             .init(id: "l-004", correspondentID: "c-amara", isOutbound: false,
                   body: "Coffee Saturday? I'll write properly after, this is just the asking part.",
                   state: .delivered, writtenAt: at(17, 8), collectedAt: at(17, 17),
                   postmarkDate: at(17, 17), expectedDeliveryDate: at(18, 10),
-                  deliveredAt: at(18, 10, 41), readAt: at(18, 20)),
+                  deliveredAt: round(18), readAt: at(18, 20)),
 
             // Written today, not yet collected: still editable, still revocable.
             .init(id: "l-005", correspondentID: "c-ben", isOutbound: true,

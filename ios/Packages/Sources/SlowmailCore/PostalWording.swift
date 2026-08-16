@@ -79,7 +79,11 @@ public enum PostalWording {
     /// Shown when today's post has not been yet. Never a countdown.
     public static let carrierNotYetBeen = "The carrier hasn't been yet today."
     public static let nothingComingToday = "No mail today."
-    public static let emptyMailboxDetail = "Nothing was posted to you in time for today's round."
+    /// Says the carrier is not expected, not that the day is closed. The round is
+    /// an estimate the client and server can disagree about by up to an hour, so
+    /// copy that forecloses the day can be contradicted a minute later by a
+    /// letter appearing. See `MailStore.carrierExpected`.
+    public static let emptyMailboxDetail = "The carrier isn't expected here again today."
     public static let postNotHereYet = "The post hasn't come yet."
     public static let emptyMailboxWaitingDetail = "The carrier is still out on today's round."
 }

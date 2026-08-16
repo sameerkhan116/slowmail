@@ -16,6 +16,14 @@ private func moment(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute
     return Calendar.postal.date(from: components)!
 }
 
+/// A moment on the reference day before the carrier reaches "me". Derived from
+/// the round rather than typed, so it stays "before delivery" if the seed moves.
+private let beforeTheRound: Date = {
+    let round = PostalCalendar.carrierArrival(
+        forRecipient: Fixtures.userID, on: thursdayAfternoon) ?? thursdayAfternoon
+    return round.addingTimeInterval(-60)
+}()
+
 private func store(at date: Date = thursdayAfternoon) -> MockMailStore {
     MockMailStore(clock: FixedClock(now: date))
 }
@@ -25,10 +33,9 @@ struct DeliveryVisibilityTests {
 
     @Test("A letter is invisible until its delivery instant")
     func inboundHiddenBeforeDelivery() async throws {
-        // Nour's letter is delivered at 13:27 on the 20th. An hour earlier it
-        // does not exist as far as the recipient is concerned.
-        let early = try #require(Calendar.postal.date(byAdding: .hour, value: -3, to: thursdayAfternoon))
-        let mailbox = try await store(at: early).mailbox()
+        // A minute before the carrier reaches this address, the letters they
+        // are carrying do not exist as far as the recipient is concerned.
+        let mailbox = try await store(at: beforeTheRound).mailbox()
         #expect(mailbox.isEmpty)
 
         let later = try await store().mailbox()
@@ -37,8 +44,7 @@ struct DeliveryVisibilityTests {
 
     @Test("Correspondence never leaks an inbound letter that hasn't landed")
     func correspondenceHidesUndelivered() async throws {
-        let early = try #require(Calendar.postal.date(byAdding: .hour, value: -3, to: thursdayAfternoon))
-        let thread = try await store(at: early).correspondence(with: "c-ben")
+        let thread = try await store(at: beforeTheRound).correspondence(with: "c-ben")
         #expect(!thread.contains { $0.id == "l-001" })
         // Your own outbound letters remain visible; they are yours.
         #expect(thread.contains { $0.id == "l-005" })
@@ -585,9 +591,13 @@ struct DeliveryPrecisionInvariant {
                                                options: .caseInsensitive)
         var day = Fixtures.referenceDate
         for _ in 0..<365 {
+            // arrivedOn(day, now: day) always takes the "today" branch, so
+            // the dated branch — the one that formats — would never be seen.
+            let laterOn = Calendar.postal.date(byAdding: .day, value: 4, to: day) ?? day
             let lines = [
                 PostalWording.expectedArrival(day),
                 PostalWording.arrivedOn(day, now: day),
+                PostalWording.arrivedOn(day, now: laterOn),
                 PostalWording.postmark(day),
             ]
             for line in lines {
@@ -605,5 +615,102 @@ struct DeliveryPrecisionInvariant {
         let five = Fixtures.referenceDate.addingTimeInterval(3_600)
         let line = PostalWording.collection(five, asOf: Fixtures.referenceDate)
         #expect(line.contains("5 pm") || line.contains("4 pm"))
+    }
+}
+
+/// Exact parity with the engine's hash, not merely parity modulo the arrival
+/// window. Carrier times observe `seeded(...) % 480`, so adding 480 to every
+/// hash would leave all five arrival vectors unchanged while breaking every
+/// other seeded draw. These pin the values themselves.
+@Suite("Seeded hashing matches the engine exactly")
+struct SeededHashGoldenVectors {
+
+    @Test("FNV-1a over UTF-16 code units")
+    func rawHash() {
+        let vectors: [(String, UInt32)] = [
+            ("", 2_166_136_261),
+            ("a", 3_826_002_220),
+            ("hello", 1_335_831_723),
+            ("ünïcodé", 592_457_729),
+            ("letter-0010", 3_472_029_081),
+            ("me", 1_747_856_039),
+        ]
+        for (input, expected) in vectors {
+            #expect(Hashing.fnv1a(input) == expected, "fnv1a(\(input))")
+        }
+    }
+
+    @Test("Namespaced hash, unit interval and inclusive range")
+    func namespacedDraws() {
+        let vectors: [(String, [String], UInt32, Double, Int)] = [
+            ("carrier-arrival", ["me", "2026-08-20"], 2_217_630_923, 0.516_332_435_188_815, 203),
+            ("transit-jitter", ["letter-0010"], 2_970_219_823, 0.691_558_193_182_572_7, 463),
+            ("carrier-arrival", ["ünïcodé", "2026-12-24"], 1_297_938_072, 0.302_199_756_726_622_58, 312),
+            ("arrival", ["me", "2026-08-20"], 414_333_630, 0.096_469_565_760_344_27, 30),
+        ]
+        for (namespace, parts, hash, unit, ranged) in vectors {
+            #expect(Hashing.seeded(namespace, parts) == hash, "seededHash(\(namespace))")
+            let actualUnit = Hashing.unitInterval(namespace, parts)
+            #expect(abs(actualUnit - unit) < 1e-15, "seededUnit(\(namespace)) = \(actualUnit)")
+            #expect(
+                Hashing.intInRange(0, 479, namespace, parts) == ranged,
+                "seededIntInRange(\(namespace))")
+        }
+    }
+}
+
+/// Everything that lands on one day lands together, because one carrier walks
+/// one round. A fixture with its own plausible-looking delivery time breaks
+/// that: the mailbox reports the carrier has been, then more mail appears.
+@Suite("Delivered mail arrives on its recipient's round")
+struct DeliveryMatchesTheRound {
+
+    @Test("Every delivered fixture matches the round for its day")
+    func deliveriesAreOnTheRound() throws {
+        let inbound = Fixtures.demo.letters.filter { !$0.isOutbound }
+        #expect(!inbound.isEmpty)
+        for letter in inbound {
+            guard let delivered = letter.deliveredAt else { continue }
+            let round = try #require(
+                PostalCalendar.carrierArrival(forRecipient: Fixtures.userID, on: delivered))
+            #expect(delivered == round, "letter \(letter.id) arrived off its round")
+        }
+    }
+
+    @Test("Nothing arrives after the carrier has been")
+    func nothingArrivesAfterTheRound() async throws {
+        // The screens are rendered mid-afternoon, after the round. If a fixture
+        // is timed later than the round, the mailbox says the post has come and
+        // then quietly grows.
+        let store = MockMailStore(clock: FixedClock(now: Fixtures.referenceDate))
+        let expected = try await store.carrierExpected(on: Fixtures.referenceDate)
+        #expect(expected == nil, "the round is already over at the reference instant")
+
+        let today = try await store.mailbox().filter {
+            $0.deliveredAt.map { Calendar.postal.isDate($0, inSameDayAs: Fixtures.referenceDate) }
+                ?? false
+        }
+        for letter in today {
+            let delivered = try #require(letter.deliveredAt)
+            #expect(delivered <= Fixtures.referenceDate, "letter \(letter.id) is still to come")
+        }
+    }
+}
+
+/// The client's idea of when the round happened is an estimate that can run
+/// ahead of the server's by up to an hour, so no copy may declare the day over.
+@Suite("The mailbox never forecloses the day")
+struct EmptyStateHonesty {
+
+    @Test("Empty-state copy makes no claim about what was posted")
+    func emptyStateClaimsNothing() {
+        let foreclosing = ["nothing was posted", "no one wrote", "nothing came",
+                           "nothing for you today", "no letters were sent"]
+        for line in [PostalWording.emptyMailboxDetail, PostalWording.emptyMailboxWaitingDetail] {
+            let lowered = line.lowercased()
+            for phrase in foreclosing {
+                #expect(!lowered.contains(phrase), "\"\(line)\" claims the day is finished")
+            }
+        }
     }
 }

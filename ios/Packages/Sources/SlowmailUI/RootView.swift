@@ -11,6 +11,9 @@ public struct RootView: View {
     /// mistake this app has no way to undo once the box is emptied.
     @State private var drafts: [CorrespondentID: String] = [:]
     @State private var isPosting = false
+    /// Bumped every time a composer opens, so a post that finishes after the
+    /// sender has closed and reopened the sheet cannot clear the new draft.
+    @State private var composerGeneration = 0
 
     public init(store: any MailStore, clock: any Clock) {
         _model = State(initialValue: AppModel(store: store, clock: clock))
@@ -56,6 +59,12 @@ public struct RootView: View {
             )
             .task { await model.markRead(letter.id) }
         }
+        .onChange(of: composing?.id) { _, opened in
+            // A new sheet is a new writing session. Closing one is not, so a
+            // post in flight when the sender walks away still tidies up after
+            // itself.
+            if opened != nil { composerGeneration += 1 }
+        }
         .sheet(item: $composing) { person in
             WriteView(
                 body: draftBinding(for: person.id),
@@ -85,6 +94,7 @@ public struct RootView: View {
     private func post(to person: Correspondent) {
         guard !isPosting else { return }
         let body = drafts[person.id] ?? ""
+        let sent = composerGeneration
         isPosting = true
         Task {
             defer { isPosting = false }
@@ -92,11 +102,13 @@ public struct RootView: View {
                 return  // On failure the draft is left exactly where it was.
             }
             // The composer can be dismissed and reopened while the post is in
-            // flight, so what comes back may no longer be what was sent. Clear
-            // only the words that actually went, and only close the sheet if it
-            // is still the one that sent them.
-            if drafts[person.id] == body { drafts[person.id] = nil }
-            if composing?.id == person.id { composing = nil }
+            // flight. Matching on the text is not enough: reopening the same
+            // person and retyping the same words is indistinguishable from
+            // never having left, and clearing then would delete a draft the
+            // sender is still writing. Only the session that sent may clear it.
+            guard composerGeneration == sent else { return }
+            drafts[person.id] = nil
+            composing = nil
         }
     }
 
