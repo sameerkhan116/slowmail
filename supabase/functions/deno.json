@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "@slowmail/mailclock": "../../packages/mailclock/src/index.ts",
+    "luxon": "npm:luxon@^3.5.0"
+  },
+  "unstable": ["sloppy-imports"],
+  "tasks": {
+    "test": "deno test tests/"
+  }
+}
